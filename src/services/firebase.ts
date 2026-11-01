@@ -211,7 +211,9 @@ export async function deleteProductFromFirestore(productId: string): Promise<voi
 export async function saveOrderToFirestore(order: Order): Promise<void> {
   const path = `orders/${order.id}`;
   try {
-    await setDoc(doc(db, 'orders', order.id), order);
+    // SECURITY INVARIANT: Strip plaintext delivery OTP before database transmission
+    const { deliveryOtpForBuyer, ...cleanOrder } = order as any;
+    await setDoc(doc(db, 'orders', order.id), cleanOrder);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -220,7 +222,8 @@ export async function saveOrderToFirestore(order: Order): Promise<void> {
 export async function updateOrderInFirestore(orderId: string, partial: Partial<Order>): Promise<void> {
   const path = `orders/${orderId}`;
   try {
-    await updateDoc(doc(db, 'orders', orderId), partial);
+    const { deliveryOtpForBuyer, ...cleanPartial } = partial as any;
+    await updateDoc(doc(db, 'orders', orderId), cleanPartial);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -244,6 +247,15 @@ export async function saveComplaintToFirestore(complaint: Complaint): Promise<vo
   }
 }
 
+export async function updateComplaintInFirestore(complaintId: string, partial: Partial<Complaint>): Promise<void> {
+  const path = `complaints/${complaintId}`;
+  try {
+    await updateDoc(doc(db, 'complaints', complaintId), partial);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function saveVerificationToFirestore(verification: SellerVerificationRequest): Promise<void> {
   const path = `verifications/${verification.id}`;
   try {
@@ -252,3 +264,22 @@ export async function saveVerificationToFirestore(verification: SellerVerificati
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
+
+export async function updateVerificationInFirestore(verificationId: string, partial: Partial<SellerVerificationRequest>): Promise<void> {
+  const path = `verifications/${verificationId}`;
+  try {
+    await updateDoc(doc(db, 'verifications', verificationId), partial);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateUserInFirestore(userId: string, partial: Partial<User>): Promise<void> {
+  const path = `users/${userId}`;
+  try {
+    await updateDoc(doc(db, 'users', userId), partial);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+

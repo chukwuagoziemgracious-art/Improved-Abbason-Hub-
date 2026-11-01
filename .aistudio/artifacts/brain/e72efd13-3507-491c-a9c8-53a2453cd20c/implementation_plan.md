@@ -1,108 +1,131 @@
-# Implementation Plan: Vivid Nigerian Flag Black-Water Canvas, All-Gold Purge, Softened Curves, and Horizontal Book-Album Categories
+# Comprehensive Security Hardening & Marketplace Integrity Plan
 
-This revision makes the rippling Nigerian flag prominently visible in the living liquid background, eliminates all residual purple colors in favor of champagne gold, softens shape geometry across all UI surfaces (16px–24px radii), and transforms the 8 departments into a compact, swipeable editorial photo book album with curated imagery.
+A comprehensive architectural overhaul of Abbason Hub's security, escrow state machines, checkout calculation pipelines, and role-based permissions before real students or money touch the platform.
 
 ---
 
 ### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following confirmed user choices govern this implementation:
+> The following decisions were confirmed during the interactive clarification turn and guide this implementation:
 
-- **Confirmed Decision 1: Category Album Photography**: Pre-populate curated, high-resolution luxury editorial photos from Unsplash for all 8 campus departments (Laptops & Tech, Fashion & Style, Groceries & Food, Beauty & Personal Care, Books & Stationery, Hostel Furniture & Home, Gadgets & Repairs, Student Services).
-- **Confirmed Decision 2: Background Visibility & Luminous Ripples**: Boost the subsurface Nigerian flag emerald green (`#008751` with luminous caustic wave highlights) and crisp ivory white bands, lift background opacity from pitch black to deep oceanic dark teal (`#040d0a`), and increase touch/mouse ripple responsiveness so wavefronts are immediately visible. Ensure all parent DOM wrappers (`body`, `#root`, `App`, `main`) use transparent or semi-translucent backdrops so the background canvas is never blocked.
-- **Confirmed Decision 3: Shape Softness**: Implement a soft rounded luxury aesthetic across the site (16px to 24px corner radii: `rounded-2xl` and `rounded-3xl` for cards, modals, and drawers; `rounded-xl` for buttons and inputs).
-- **Confirmed Decision 4: Purple-to-Gold Color Purge**: Search and replace all lingering purple color classes (`purple-900`, `purple-950`, `purple-800`, `purple-700`, `purple-300`, etc.) across all components, replacing them with champagne gold (`#C8A96A`, `border-[#C8A96A]/30`, `bg-[#C8A96A]/10`, etc.).
-
----
-
-### 1. Overview & Core Concept
-
-- **Living Flag & Ambient Liquid Canvas**: Rework the procedural shader on `<canvas id="water">` with vibrant green channels (`#008751`), higher light reflection exponents, and responsive cursor/touch ripple amplitudes. Remove opaque solid backgrounds on foreground elements so the fluid reflection clearly shows through.
-- **Swipeable Editorial Category Book Album**: Replace the vertical 8-card grid with a compact, horizontal photo album carousel. Users can swipe smoothly across department picture cards like browsing an editorial lookbook, complete with prev/next navigation buttons, snap-scroll points, category subtitle tags, and active state indicators.
-- **Unified Soft Luxury Visual System**: Replace sharp 6px radii with smooth 16px–24px curvatures, and ensure every border, badge, and glow carries the champagne gold palette.
+- **Confirmed Decision 1 (Multi-Vendor Checkout)**: Split the basket at checkout into distinct orders grouped by campus vendor, each with its own escrow tracking, seller payout calculation, and individual delivery OTP.
+- **Confirmed Decision 2 (Delivery Code Verification & Escrow Payout)**: Server-authoritative execution via Express endpoint (`/api/orders/verify-delivery-otp`), where the server fetches the order directly from Firestore to evaluate the cryptographic hash and release payouts rather than trusting browser-submitted hashes.
+- **Confirmed Decision 3 (Admin Authentication)**: Super Admin console access is strictly tied to verified Google Authentication matching the owner account (`chukwuagoziemgracious@gmail.com`). All client-side hardcoded passcodes (`abbason2026`, `admin123`) are removed.
 
 ---
 
-### 2. User Experience & Visual Design
+## 1. Overview & Core Concept
 
-#### A. Living Liquid Canvas & Flag Visibility Overhaul
-- **Base Canvas Tone**: Shift from `#020406` (pitch opaque black) to deep ocean water `#030c08` with subtle dark cyan undertones.
-- **Flag Tricolor Intensity**:
-  - Left & Right Green Bands: Pure Nigerian emerald (`#008751` RGB `0, 135, 81`), with dynamic caustic wave highlights rising to 180–220 on ripples.
-  - Middle White Band: Luminous ivory white (`#F2F4EE`) at 55% intensity with wave refraction.
-- **Ripple Dynamics**: Enhanced pointer tracking with decayed wave damping ($e^{-3d} \cdot \sin(28d - 3.5t)$) for crisp, ripples deforming the flag in real-time.
-- **DOM Transparency**: Ensure `body`, `#root`, `App`, and `<main>` have transparent or faint obsidian tints (`bg-transparent` / `bg-[#020406]/35`) so the canvas at `z-index: -1` is directly visible.
-
-#### B. Department / Category "Book Photo Album" Carousel
-- **Spatial Footprint**: Compact, single-row horizontal album carousel that saves significant vertical page space while offering tactile delight.
-- **Card Geometry & Aspect Ratio**: 3:4 portrait photo album cards with `rounded-2xl` (16px) corners, subtle 1px champagne gold borders, soft vignette bottom overlays, and smooth hover elevation.
-- **8 Curated Editorial Photos**:
-  1. *Laptops & Tech*: Minimalist workspace with MacBook & sleek headphones (`https://images.unsplash.com/photo-1517336714731-489689fd1ca8`)
-  2. *Fashion & Style*: Modern African urban fashion and designer tailoring (`https://images.unsplash.com/photo-1509631179647-0177331693ae`)
-  3. *Groceries & Food*: Artisanal campus kitchen essentials & snacks (`https://images.unsplash.com/photo-1542838132-92c53300491e`)
-  4. *Beauty & Fragrance*: Minimalist luxury skincare & amber bottles (`https://images.unsplash.com/photo-1570172619644-dfd03ed5d881`)
-  5. *Books & Stationery*: Bound notebooks, study guides, and brass pen (`https://images.unsplash.com/photo-1497633762265-9d179a990aa6`)
-  6. *Hostel Living & Home*: Cozy hostel room desk lamp and storage (`https://images.unsplash.com/photo-1513694203232-719a280e022f`)
-  7. *Gadgets & Repairs*: Precision smartphone electronics workbench (`https://images.unsplash.com/photo-1581092160607-ee22621dd758`)
-  8. *Campus Student Services*: Creative digital camera and workspace (`https://images.unsplash.com/photo-1492691527719-9d1e07e534b4`)
-- **Interaction**: Horizontal swipe (`snap-x snap-mandatory`), touch drag, mouse wheel horizontal scroll, and desktop Chevron Left/Right navigation buttons.
-
-#### C. Edge Softening & Complete Purple-to-Gold Purge
-- **Softer Corners**:
-  - Cards & Modals: `rounded-2xl` (16px) and `rounded-3xl` (24px)
-  - Buttons & Form Inputs: `rounded-xl` (12px)
-  - Badges & Pills: `rounded-full`
-- **Color Unification**:
-  - Convert remaining purple accents in `Header`, `Hero`, `ProductCard`, `BasketDrawer`, `SellerDashboard`, `AuthModal`, etc., to champagne gold (`#C8A96A`) and warm ivory (`#E9E6DF`).
+- **What It Does**: Hardens Abbason Hub against fraud, unauthorized database scraping, identity spoofing, fee discrepancies, and state rollbacks. Ensures that buyers, vendors, and the platform administrator have strictly isolated access rights and mathematically protected escrow state transitions.
+- **Target Audience / Persona**: Nigerian university students (buyers & sellers) using 3G mobile devices, and the platform owner (`chukwuagoziemgracious@gmail.com`) managing nationwide campus operations.
+- **Key Value**: Zero-trust security where secrets (plaintext delivery OTPs, bank accounts, matric cards) are hidden from unauthorized eyes, orders cannot be fraudulently manipulated, and financial calculations are 100% consistent across checkout and backend ledgers.
 
 ---
 
-### 3. Key Product Decisions & Trade-Offs
+## 2. Security & Vulnerability Remediation Matrix
 
-- **Decision 1: Curated High-Res Unsplash Images in Store Seed Data**
-  - *Chosen Approach*: Associate high-quality photography URLs with each category in `src/services/store.ts` and `src/data/seedData.ts`.
-  - *Why*: Provides instant visual richness matching the luxury aesthetic without requiring user manual upload, while allowing category cards to look like magazine plates.
-- **Decision 2: Horizontal Carousel with Native Scroll & Snap vs Third-Party Slider**
-  - *Chosen Approach*: Implement a zero-dependency CSS flex snap carousel (`overflow-x-auto snap-x snap-mandatory scroll-smooth`) with React ref controls for Previous/Next buttons.
-  - *Why*: 60fps native swipe on touch devices, zero bundle bloat, zero layout shifts, and accessible keyboard navigation.
-- **Decision 3: Background Transparency Calibration**
-  - *Chosen Approach*: Keep foreground card surfaces as frosted translucent glass (`bg-[#020406]/70 backdrop-blur-md border border-white/[0.08]`) while removing solid pitch black backgrounds from root layout wrappers.
-  - *Why*: Allows the green-and-white rippling water to be clearly seen surrounding and between cards without degrading text contrast.
+### A. Critical Security Flaws
+
+1. **Plaintext Delivery OTP Exposure & Unrestricted Order Scraping**
+   - *Problem*: `deliveryOtpForBuyer` was saved in the root order document, and `/orders` allowed blanket listing. Any student could inspect the network tab or query Firestore to obtain the OTP and claim someone else's order without meeting them.
+   - *Fix*: 
+     - Remove `deliveryOtpForBuyer` from the cloud `/orders/{orderId}` document. The cloud document stores ONLY `otpHash` and `otpSalt`.
+     - The plaintext OTP is stored locally in the authenticated buyer's secure storage or separate private buyer path.
+     - Hardened Firestore rules: Only the buyer (`request.auth.uid == resource.data.buyerId`), the assigned seller (`request.auth.uid == resource.data.sellerId`), or the Super Admin can read an order. Blanket list queries by guests are forbidden.
+
+2. **Unauthenticated Order Progression & Listing Tampering**
+   - *Problem*: Rules permitted any caller to update orders or edit products without checking identity.
+   - *Fix*: 
+     - Orders can only be modified by the server or by the assigned buyer/seller for valid status transitions.
+     - Product listings can only be edited or deleted by the original listing owner (`request.auth.uid == existing().sellerId`) or the Super Admin.
+
+3. **Public Student ID Photos & Bank Details**
+   - *Problem*: `/verifications` allowed public listing, exposing student ID cards and bank account numbers.
+   - *Fix*: Restrict `verifications` read/list permissions strictly to `isAdmin() || (isSignedIn() && request.auth.uid == resource.data.userId)`.
+
+4. **Hardcoded Client-Side Admin Passcodes**
+   - *Problem*: `authenticateAdmin` evaluated `'abbason2026'` and `'admin123'` directly in client JavaScript.
+   - *Fix*: Remove hardcoded strings. Authenticate Super Admin strictly through Firebase Auth Google Sign-In verifying `request.auth.token.email == 'chukwuagoziemgracious@gmail.com'`.
+
+5. **Server OTP Hash Spoofing Bypass**
+   - *Problem*: `/api/orders/verify-delivery-otp` trusted the client-supplied `storedHash` and `salt`.
+   - *Fix*: The server endpoint reads the verified order directly from the database using `orderId`, compares the submitted code with the authoritative stored hash, enforces rate-limiting (5 attempts max), and updates the status to `delivered` / `payout_released`.
 
 ---
 
-### 4. Technical Architecture & System Layout
+### B. High & Lower Priority Integrity Fixes
+
+1. **Checkout & Order Calculation Discrepancies**
+   - *Gateway Fee*: Standardize formula to `calculateGatewayFee(totalOrderAmount)` consistently across `CheckoutModal` and `store.ts`.
+   - *Delivery Fee*: Align calculation so the checkout summary exactly matches the saved order record.
+
+2. **Multi-Vendor Basket Splitting**
+   - When a student checks out items from multiple sellers, `createOrder` groups items by `sellerId` and creates separate order records, each with its own order number, seller payout, delivery instructions, and unique OTP.
+
+3. **Inventory Management (Stock Decrement)**
+   - When orders are placed, `product.stock` is decremented in `store.ts` and synced to Firestore. Out-of-stock items are flagged to prevent double-selling.
+
+4. **Dispute Persistence**
+   - Connect `resolveDispute` and `fileComplaint` directly to Firestore mutations (`saveComplaintToFirestore`, `updateOrderInFirestore`) so dispute states persist across page reloads and devices.
+
+5. **Elimination of Mock Fallbacks & Collision-Resistant IDs**
+   - Replace `Date.now()` + 5-digit random numbers with crypto-random UUIDs and collision-resistant order tags (`AB-XXXXXX`).
+   - Remove fake "Access Bank ******4819" mock fallbacks; require real bank submission upon seller verification.
+
+---
+
+## 3. Technical Architecture & Component Flow
 
 ```
-┌────────────────────────────────────────────────────────┐
-│                   BROWSER VIEWPORT                     │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │ #water Living Canvas (z-index: -1)               │  │
-│  │ - Oceanic dark emerald base tone (#030c08)       │  │
-│  │ - Clearly visible Green/White/Green reflection   │  │
-│  │ - Interactive touch/mouse fluid ripples          │  │
-│  │ - Calibrated contrast vignette                   │  │
-│  └──────────────────────────────────────────────────┘  │
-│                           ▲                            │
-│  ┌────────────────────────┴─────────────────────────┐  │
-│  │ APPLICATION UI SHELL (Transparent / Soft Glass)  │  │
-│  │ ┌──────────────────────────────────────────────┐ │  │
-│  │ │ Luxury Header (Gold buttons & badges)        │ │  │
-│  │ └──────────────────────────────────────────────┘ │  │
-│  │ ┌──────────────────────────────────────────────┐ │  │
-│  │ │ Hero Section (Soft rounded 24px glass card)  │ │  │
-│  │ └──────────────────────────────────────────────┘ │  │
-│  │ ┌──────────────────────────────────────────────┐ │  │
-│  │ │ Department Album (Horizontal Swipeable Book) │ │  │
-│  │ │ [Tech] [Fashion] [Food] [Beauty] [Books] ... │ │  │
-│  │ └──────────────────────────────────────────────┘ │  │
-│  │ ┌──────────────────────────────────────────────┐ │  │
-│  │ │ Verified Product Catalog (16px rounded cards)│ │  │
-│  │ └──────────────────────────────────────────────┘ │  │
-│  │ ┌──────────────────────────────────────────────┐ │  │
-│  │ │ Modals & Drawers (24px softened corners)     │ │  │
-│  │ └──────────────────────────────────────────────┘ │  │
-│  └──────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                          Student Client (UI)                           │
+│  - Multi-vendor Basket (Splits by sellerId at checkout)               │
+│  - Buyer Private Vault (Keeps plaintext OTP local to buyer only)       │
+│  - Strict Google Auth (Admin locked to chukwuagoziemgracious@...)      │
+└───────────────────┬────────────────────────────────┬───────────────────┘
+                    │                                │
+            Direct Firestore Mutations               │ Sensitive Operations
+          (Protected by hardened ABAC)               │ (OTP & Payout Release)
+                    ▼                                ▼
+┌──────────────────────────────────────┐  ┌──────────────────────────────┐
+│       Cloud Firestore Rules          │  │     Express Server (/api)    │
+│  - /products: Public read, seller auth│  │  - /api/orders/verify-otp:   │
+│  - /orders: Buyer, seller & admin only│  │    * Fetches DB order by ID │
+│  - /verifications: Private PII       │  │    * Verifies SHA-256 hash  │
+│  - /users: Owner & admin read        │  │    * Authorizes escrow payout│
+└──────────────────────────────────────┘  └──────────────┬───────────────┘
+                                                         │
+                                                         ▼
+                                          ┌──────────────────────────────┐
+                                          │  Escrow Ledger & Firestore   │
+                                          │  Order marked 'delivered'    │
+                                          │  Payout recorded in ledger   │
+                                          └──────────────────────────────┘
 ```
+
+---
+
+## 4. Implementation Steps
+
+1. **Server Endpoint Hardening (`server.ts`)**:
+   - Refactor `/api/orders/verify-delivery-otp` to verify OTP using the authoritative stored hash from the database.
+   - Enforce 5-attempt locking and server-authoritative payout release.
+
+2. **Security Rules Update & Deployment (`firestore.rules`)**:
+   - Gated `/orders`: Read/list allowed only if `resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid || isAdmin()`.
+   - Gated `/verifications`: Read/list allowed only if `resource.data.userId == request.auth.uid || isAdmin()`.
+   - Gated `/products`: Updates/deletions restricted to listing owner or admin.
+   - Deploy rules via `DeployRules` RPC.
+
+3. **Core Store Hardening (`src/services/store.ts` & `src/services/firebase.ts`)**:
+   - Remove plaintext `deliveryOtpForBuyer` from cloud payloads. Store it only in buyer-specific local storage.
+   - Implement multi-vendor order splitting in `checkoutOrder`.
+   - Fix gateway fee and delivery fee calculation parity.
+   - Decrement `product.stock` on purchase and sync to Firestore.
+   - Wire `resolveDispute` and seller approvals directly to Firestore.
+   - Remove hardcoded admin passcodes; enforce `request.auth.token.email === 'chukwuagoziemgracious@gmail.com'`.
+
+4. **UI Updates (`CheckoutModal.tsx`, `AdminLoginModal.tsx`, `AdminDashboard.tsx`)**:
+   - Update `CheckoutModal` to display multi-vendor item grouping with sub-totals and consolidated delivery.
+   - Update `AdminLoginModal` to remove the passcode field entirely and use Google OAuth directly.

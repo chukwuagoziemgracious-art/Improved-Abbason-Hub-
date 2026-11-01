@@ -29,7 +29,7 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Platform Super Admin for Abbason Hub
+    // Platform Super Admin for Abbason Hub - verified by trusted email from auth token
     function isAdmin() {
       return isSignedIn() && (
         request.auth.token.email == 'chukwuagoziemgracious@gmail.com' ||
@@ -55,7 +55,9 @@ service cloud.firestore {
              data.sellerId is string && data.sellerId.size() <= 128 &&
              data.totalAmount is number && data.totalAmount >= 0 &&
              data.status in ['paid_awaiting_delivery', 'delivered', 'disputed', 'cancelled'] &&
-             data.paymentStatus in ['escrow_held', 'payout_released', 'refunded'];
+             data.paymentStatus in ['escrow_held', 'payout_released', 'refunded'] &&
+             // STRICT INVARIANT: Plaintext delivery OTP must NEVER be stored in the database
+             !('deliveryOtpForBuyer' in data);
     }
 
     function isValidUser(data) {
@@ -91,19 +93,36 @@ service cloud.firestore {
 
     // --- Collection Security Rules ---
 
-    // 1. Marketplace Products (Public catalog browsing with schema validation on writes)
+    // 1. Marketplace Products (Public catalog browsing with ownership checks on mutations)
     match /products/{productId} {
       allow get, list: if true;
-      allow create: if isValidId(productId) && isValidProduct(incoming());
-      allow update: if isValidId(productId) && isValidProduct(incoming());
+      allow create: if isValidId(productId) && isSignedIn() &&
+        isValidProduct(incoming()) &&
+        (incoming().sellerId == request.auth.uid || isAdmin());
+      allow update: if isValidId(productId) && (
+        isAdmin() ||
+        (isSignedIn() && existing().sellerId == request.auth.uid && incoming().sellerId == existing().sellerId && isValidProduct(incoming())) ||
+        // Stock decrement during order placement
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock']) && request.resource.data.stock is number && request.resource.data.stock >= 0)
+      );
       allow delete: if isValidId(productId) && (isAdmin() || (isSignedIn() && existing().sellerId == request.auth.uid));
     }
 
-    // 2. Escrow Orders (Marketplace order sync and fulfillment)
+    // 2. Escrow Orders (Strict ABAC: restricted strictly to buyer, seller, or super admin)
     match /orders/{orderId} {
-      allow get, list: if true;
-      allow create: if isValidId(orderId) && isValidOrder(incoming());
-      allow update: if isValidId(orderId) && isValidOrder(incoming());
+      allow get: if isValidId(orderId) && (
+        isAdmin() ||
+        (isSignedIn() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid))
+      );
+      allow list: if isAdmin() ||
+        (isSignedIn() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid));
+      allow create: if isValidId(orderId) && isSignedIn() &&
+        isValidOrder(incoming()) &&
+        (incoming().buyerId == request.auth.uid || isAdmin());
+      allow update: if isValidId(orderId) && (
+        isAdmin() ||
+        (isSignedIn() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid))
+      );
       allow delete: if isAdmin();
     }
 
@@ -111,32 +130,44 @@ service cloud.firestore {
     match /users/{userId} {
       allow get: if isValidId(userId);
       allow list: if isAdmin();
-      allow create: if isValidId(userId) && isValidUser(incoming());
-      allow update: if isValidId(userId) && isValidUser(incoming());
+      allow create, update: if isValidId(userId) && (isAdmin() || (isSignedIn() && request.auth.uid == userId));
       allow delete: if isAdmin();
     }
 
     // 4. Seller Reviews (Campus feedback)
     match /reviews/{reviewId} {
       allow get, list: if true;
-      allow create, update: if isValidId(reviewId) && isValidReview(incoming());
-      allow delete: if isAdmin();
+      allow create: if isValidId(reviewId) && isSignedIn() &&
+        isValidReview(incoming()) &&
+        incoming().buyerId == request.auth.uid;
+      allow update, delete: if isAdmin() || (isSignedIn() && existing().buyerId == request.auth.uid);
     }
 
-    // 5. Escrow Complaints & Disputes
+    // 5. Escrow Complaints & Disputes (Restricted to involved parties and admin)
     match /complaints/{complaintId} {
-      allow get, list: if true;
-      allow create: if isValidId(complaintId) && isValidComplaint(incoming());
-      allow update: if isValidId(complaintId) && isValidComplaint(incoming());
-      allow delete: if isAdmin();
+      allow get, list: if isAdmin() ||
+        (isSignedIn() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid));
+      allow create: if isValidId(complaintId) && isSignedIn() &&
+        isValidComplaint(incoming()) &&
+        incoming().buyerId == request.auth.uid;
+      allow update, delete: if isAdmin();
     }
 
-    // 6. Student Seller Verifications
+    // 6. Student Seller Verifications (Strictly private PII: applicant and admin only)
     match /verifications/{verificationId} {
-      allow get, list: if true;
-      allow create: if isValidId(verificationId) && isValidVerification(incoming());
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow get, list: if isAdmin() ||
+        (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(verificationId) && isSignedIn() &&
+        isValidVerification(incoming()) &&
+        incoming().userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // 7. Payout Records (Restricted to vendor and admin)
+    match /payouts/{payoutId} {
+      allow get, list: if isAdmin() ||
+        (isSignedIn() && resource.data.sellerId == request.auth.uid);
+      allow create, update, delete: if isAdmin();
     }
   }
 }

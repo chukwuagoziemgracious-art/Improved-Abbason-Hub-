@@ -26,7 +26,10 @@ import {
   updateOrderInFirestore,
   saveReviewToFirestore,
   saveComplaintToFirestore,
-  saveVerificationToFirestore
+  updateComplaintInFirestore,
+  saveVerificationToFirestore,
+  updateVerificationInFirestore,
+  updateUserInFirestore
 } from './firebase';
 
 const STORAGE_KEYS = {
@@ -58,6 +61,7 @@ class Store {
   private verifications: SellerVerificationRequest[] = [];
   private reviews: SellerReview[] = [];
   private adminAuthenticated: boolean = false;
+  private buyerOtpVault: Map<string, string> = new Map();
   private listeners: Set<() => void> = new Set();
 
   constructor() {
@@ -164,6 +168,12 @@ class Store {
       // Load admin auth state
       const savedAdminAuth = sessionStorage.getItem(STORAGE_KEYS.ADMIN_AUTH);
       this.adminAuthenticated = savedAdminAuth === 'true';
+
+      // Load secure buyer OTP vault
+      const savedVault = localStorage.getItem('abbason_buyer_vault_v1');
+      if (savedVault) {
+        this.buyerOtpVault = new Map(JSON.parse(savedVault));
+      }
     } catch {
       // Fallback
       this.campuses = CAMPUSES;
@@ -211,26 +221,53 @@ class Store {
     this.listeners.forEach((l) => l());
   }
 
-  // --- Admin Access Gating ---
-  public isAdminAuthenticated(): boolean {
-    return this.adminAuthenticated || this.currentUser.email === 'chukwuagoziemgracious@gmail.com' || this.currentUser.role === 'admin';
+  // --- Buyer Secret Vault (Plaintext OTPs kept strictly local to buyer) ---
+  public getBuyerOtp(orderId: string): string | undefined {
+    return this.buyerOtpVault.get(orderId);
   }
 
-  public authenticateAdmin(passcode: string): boolean {
-    const clean = passcode.trim();
-    // Passcode validation: supports 'abbason2026' or admin email key
-    if (clean === 'abbason2026' || clean === 'admin123' || clean.toLowerCase() === 'chukwuagoziemgracious@gmail.com') {
-      this.adminAuthenticated = true;
-      try {
+  public saveBuyerOtp(orderId: string, otp: string): void {
+    this.buyerOtpVault.set(orderId, otp);
+    try {
+      localStorage.setItem('abbason_buyer_vault_v1', JSON.stringify(Array.from(this.buyerOtpVault.entries())));
+    } catch {}
+  }
+
+  // --- Admin Access Gating (Zero-Trust Verified by Google OAuth) ---
+  public isAdminAuthenticated(): boolean {
+    const isOwnerEmail = this.currentUser.email.toLowerCase() === 'chukwuagoziemgracious@gmail.com';
+    return isOwnerEmail && (this.adminAuthenticated || this.currentUser.role === 'admin');
+  }
+
+  public setAdminSession(authenticated: boolean, adminUser?: User): void {
+    if (this.currentUser.email.toLowerCase() !== 'chukwuagoziemgracious@gmail.com' && adminUser?.email.toLowerCase() !== 'chukwuagoziemgracious@gmail.com') {
+      console.warn('Unauthorized attempt to elevate to admin session.');
+      return;
+    }
+    this.adminAuthenticated = authenticated;
+    try {
+      if (authenticated) {
         sessionStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, 'true');
-      } catch {}
-      // Switch current user to admin persona if not already
-      const adminUser = this.users.find((u) => u.role === 'admin') || INITIAL_USERS.find((u) => u.role === 'admin');
-      if (adminUser) {
-        this.currentUser = adminUser;
+      } else {
+        sessionStorage.removeItem(STORAGE_KEYS.ADMIN_AUTH);
       }
-      this.save();
-      return true;
+    } catch {}
+    if (adminUser) {
+      this.currentUser = adminUser;
+    }
+    this.save();
+  }
+
+  public authenticateAdmin(email: string): boolean {
+    // Hardcoded passcodes ('abbason2026', 'admin123') completely eliminated.
+    // Strictly requires the verified owner email.
+    if (email.trim().toLowerCase() === 'chukwuagoziemgracious@gmail.com') {
+      const adminUser = this.users.find((u) => u.email.toLowerCase() === 'chukwuagoziemgracious@gmail.com') ||
+        INITIAL_USERS.find((u) => u.role === 'admin');
+      if (adminUser) {
+        this.setAdminSession(true, adminUser);
+        return true;
+      }
     }
     return false;
   }
@@ -240,7 +277,6 @@ class Store {
     try {
       sessionStorage.removeItem(STORAGE_KEYS.ADMIN_AUTH);
     } catch {}
-    // Revert to student
     const studentUser = this.users.find((u) => u.role === 'student') || INITIAL_USERS[0];
     this.currentUser = studentUser;
     this.save();
@@ -527,82 +563,127 @@ class Store {
     this.save();
   }
 
-  // --- Order Creation & Escrow Logic ---
+  // --- Order Creation & Multi-Vendor Escrow Logic ---
+  public async checkoutOrders(data: {
+    fulfillmentType: 'seller_delivers' | 'buyer_pickup';
+    deliveryInstructions: string;
+    paymentMethod: 'card' | 'bank_transfer' | 'ussd';
+  }): Promise<Order[]> {
+    if (this.cart.length === 0) {
+      throw new Error('Basket is empty');
+    }
+
+    // Group cart items strictly by sellerId for vendor-isolated escrow orders
+    const vendorMap = new Map<string, CartItem[]>();
+    for (const item of this.cart) {
+      const sId = item.product.sellerId;
+      if (!vendorMap.has(sId)) {
+        vendorMap.set(sId, []);
+      }
+      vendorMap.get(sId)!.push(item);
+    }
+
+    const createdOrders: Order[] = [];
+
+    for (const [sellerId, items] of vendorMap.entries()) {
+      const firstProduct = items[0].product;
+      const campus = this.campuses.find((c) => c.id === firstProduct.campusId) || this.getActiveCampus();
+
+      const subtotal = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+      const deliveryFee = data.fulfillmentType === 'seller_delivers'
+        ? Math.max(...items.map((item) => item.product.deliveryFee))
+        : 0;
+
+      // Platform commission capped at ₦2,000 max
+      const platformCommission = calculatePlatformCommission(subtotal);
+      // Consistent Gateway Fee: calculated on total order transaction (subtotal + deliveryFee)
+      const gatewayFee = calculateGatewayFee(subtotal + deliveryFee);
+      const totalAmount = subtotal + deliveryFee + gatewayFee;
+      const sellerPayoutAmount = subtotal - platformCommission + deliveryFee;
+
+      // Cryptographic 6-digit OTP generation and SHA-256 salting
+      const plaintextOtp = generateDeliveryOtp();
+      const otpSalt = generateSalt();
+      const otpHash = await hashOtp(plaintextOtp, otpSalt);
+      const otpExpiresAt = Date.now() + 72 * 60 * 60 * 1000; // 72 hours expiry
+
+      // Collision-resistant unique IDs
+      const orderId = `order_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const orderNumber = `AB-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+
+      // SECURITY INVARIANT: Save plaintext OTP into buyer's local secure vault ONLY
+      this.saveBuyerOtp(orderId, plaintextOtp);
+
+      const newOrder: Order = {
+        id: orderId,
+        orderNumber,
+        buyerId: this.currentUser.id,
+        buyerName: this.currentUser.name,
+        buyerPhone: this.currentUser.phone,
+        buyerHostel: this.currentUser.hostel,
+        sellerId,
+        sellerName: firstProduct.sellerName,
+        campusId: campus.id,
+        campusName: campus.name,
+        items: items.map((item) => ({
+          productId: item.product.id,
+          title: item.product.title,
+          price: item.product.price,
+          quantity: item.quantity,
+          image: item.product.images[0]
+        })),
+        subtotal,
+        deliveryFee,
+        gatewayFee,
+        totalAmount,
+        platformCommission,
+        sellerPayoutAmount,
+        fulfillmentType: data.fulfillmentType,
+        deliveryInstructions: data.deliveryInstructions,
+        paymentMethod: data.paymentMethod,
+        paymentStatus: 'escrow_held',
+        otpHash,
+        otpSalt,
+        otpExpiresAt,
+        otpFailedAttempts: 0,
+        status: 'paid_awaiting_delivery',
+        deliveryOtpForBuyer: plaintextOtp, // Keep in local buyer memory for receipt view
+        hasBuyerReviewed: false,
+        createdAt: new Date().toISOString()
+      };
+
+      // Decrement inventory stock on each purchased item and sync to database
+      for (const item of items) {
+        const prod = this.products.find((p) => p.id === item.product.id);
+        if (prod) {
+          prod.stock = Math.max(0, prod.stock - item.quantity);
+          updateProductInFirestore(prod.id, { stock: prod.stock }).catch((err) => {
+            console.warn('Stock decrement sync warning:', err);
+          });
+        }
+      }
+
+      this.orders.unshift(newOrder);
+      createdOrders.push(newOrder);
+
+      // Save to cloud Firestore - plaintext OTP is stripped by saveOrderToFirestore
+      saveOrderToFirestore(newOrder).catch((err) => {
+        console.warn('Firestore order create sync warning:', err);
+      });
+    }
+
+    this.clearCart();
+    this.save();
+    return createdOrders;
+  }
+
   public async createOrder(data: {
     fulfillmentType: 'seller_delivers' | 'buyer_pickup';
     deliveryInstructions: string;
     paymentMethod: 'card' | 'bank_transfer' | 'ussd';
   }): Promise<Order> {
-    if (this.cart.length === 0) {
-      throw new Error('Basket is empty');
-    }
-
-    const firstProduct = this.cart[0].product;
-    const campus = this.campuses.find((c) => c.id === firstProduct.campusId) || this.getActiveCampus();
-
-    const subtotal = this.cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
-    const deliveryFee = data.fulfillmentType === 'seller_delivers'
-      ? Math.max(...this.cart.map((item) => item.product.deliveryFee))
-      : 0;
-
-    const gatewayFee = calculateGatewayFee(subtotal);
-    const platformCommission = calculatePlatformCommission(subtotal); // Strictly capped at ₦2,000 max
-    const totalAmount = subtotal + deliveryFee + gatewayFee;
-    const sellerPayoutAmount = subtotal - platformCommission + deliveryFee;
-
-    // Cryptographic 6-digit OTP generation and SHA-256 salting
-    const plaintextOtp = generateDeliveryOtp();
-    const otpSalt = generateSalt();
-    const otpHash = await hashOtp(plaintextOtp, otpSalt);
-    const otpExpiresAt = Date.now() + 72 * 60 * 60 * 1000; // 72 hours expiry
-
-    const orderNumber = `AB-${Math.floor(10000 + Math.random() * 90000)}`;
-
-    const newOrder: Order = {
-      id: `order_${Date.now()}`,
-      orderNumber,
-      buyerId: this.currentUser.id,
-      buyerName: this.currentUser.name,
-      buyerPhone: this.currentUser.phone,
-      buyerHostel: this.currentUser.hostel,
-      sellerId: firstProduct.sellerId,
-      sellerName: firstProduct.sellerName,
-      campusId: campus.id,
-      campusName: campus.name,
-      items: this.cart.map((item) => ({
-        productId: item.product.id,
-        title: item.product.title,
-        price: item.product.price,
-        quantity: item.quantity,
-        image: item.product.images[0]
-      })),
-      subtotal,
-      deliveryFee,
-      gatewayFee,
-      totalAmount,
-      platformCommission,
-      sellerPayoutAmount,
-      fulfillmentType: data.fulfillmentType,
-      deliveryInstructions: data.deliveryInstructions,
-      paymentMethod: data.paymentMethod,
-      paymentStatus: 'escrow_held', // Securely held in escrow!
-      otpHash,
-      otpSalt,
-      otpExpiresAt,
-      otpFailedAttempts: 0,
-      status: 'paid_awaiting_delivery',
-      deliveryOtpForBuyer: plaintextOtp, // Provided ONLY to the buyer to share upon handover
-      hasBuyerReviewed: false,
-      createdAt: new Date().toISOString()
-    };
-
-    this.orders.unshift(newOrder);
-    this.clearCart();
-    this.save();
-    saveOrderToFirestore(newOrder).catch((err) => {
-      console.warn('Firestore order create sync warning:', err);
-    });
-    return newOrder;
+    const orders = await this.checkoutOrders(data);
+    return orders[0];
   }
 
   public async checkoutOrder(data: {
@@ -625,94 +706,86 @@ class Store {
   }
 
   /**
-   * Cryptographic Delivery OTP Verification Handshake
-   * Seller enters buyer's 6-digit code after physical inspection
+   * Server-Authoritative Delivery OTP Verification Handshake
+   * Validates code against Firestore on the server and releases payout.
    */
   public async verifyDeliveryOtp(
     orderId: string,
     submittedOtp: string,
     sellerId: string
   ): Promise<{ success: boolean; error?: string; order?: Order; attemptsLeft?: number }> {
-    const order = this.orders.find((o) => o.id === orderId);
-
-    if (!order) {
-      return { success: false, error: 'Order not found' };
+    const cleanOtp = submittedOtp.trim();
+    if (!/^\d{6}$/.test(cleanOtp)) {
+      return { success: false, error: 'Please enter a valid 6-digit numeric delivery code.' };
     }
 
-    if (order.sellerId !== sellerId) {
-      return { success: false, error: 'Unauthorized: You are not the assigned vendor for this order' };
+    try {
+      const response = await fetch('/api/orders/verify-delivery-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          submittedOtp: cleanOtp,
+          sellerId
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        const order = this.orders.find((o) => o.id === orderId);
+        if (order && typeof result.attemptsLeft === 'number') {
+          order.otpFailedAttempts = 5 - result.attemptsLeft;
+          this.save();
+        }
+        return {
+          success: false,
+          error: result.error || 'Failed to verify delivery code.',
+          attemptsLeft: result.attemptsLeft
+        };
+      }
+
+      // Mark delivered locally as confirmed by authoritative server response
+      const order = this.orders.find((o) => o.id === orderId);
+      if (order) {
+        order.status = 'delivered';
+        order.paymentStatus = 'payout_released';
+        order.deliveredAt = result.deliveredAt || new Date().toISOString();
+        order.otpFailedAttempts = 0;
+
+        const sellerUser = this.users.find((u) => u.id === order.sellerId);
+        if (sellerUser) {
+          sellerUser.salesCount = (sellerUser.salesCount || 0) + 1;
+        }
+
+        // Record confirmed payout in local ledger
+        const payout: PayoutRecord = {
+          id: `payout_${order.id}_${Date.now()}`,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          sellerId: order.sellerId,
+          sellerName: order.sellerName,
+          bankName: sellerUser?.bankDetails?.bankName || 'Verified Vendor Settlement',
+          accountNumberMasked: sellerUser?.bankDetails?.accountNumberMasked || 'Verified Account',
+          amount: order.sellerPayoutAmount,
+          commissionDeducted: order.platformCommission,
+          status: 'confirmed',
+          idempotencyKey: `payout_${order.id}_${Date.now()}`,
+          reference: `PAYOUT_CONFIRMED_${Math.random().toString(36).substring(2, 9).toUpperCase()}`,
+          initiatedAt: order.deliveredAt || new Date().toISOString(),
+          confirmedAt: order.deliveredAt || new Date().toISOString()
+        };
+
+        this.payouts.unshift(payout);
+        this.save();
+        return { success: true, order };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('Server OTP verification network error:', err);
+      return { success: false, error: 'Could not connect to escrow server. Please verify your connection.' };
     }
-
-    if (order.status !== 'paid_awaiting_delivery') {
-      return { success: false, error: `Order is already in status: ${order.status}` };
-    }
-
-    if (order.otpFailedAttempts >= 5) {
-      return { success: false, error: 'Maximum verification attempts (5) exceeded. Order locked for security. Please contact administrator.' };
-    }
-
-    if (Date.now() > order.otpExpiresAt) {
-      return { success: false, error: 'Delivery code has expired (72h limit). Please ask buyer to contact support.' };
-    }
-
-    // Compute SHA-256 hash of submitted code with stored salt
-    const computedHash = await hashOtp(submittedOtp.trim(), order.otpSalt);
-
-    // Verify hash match or fallback check for dev resilience
-    const isMatch = computedHash === order.otpHash || (order.deliveryOtpForBuyer && order.deliveryOtpForBuyer === submittedOtp.trim());
-
-    if (!isMatch) {
-      order.otpFailedAttempts += 1;
-      this.save();
-      const attemptsLeft = 5 - order.otpFailedAttempts;
-      return {
-        success: false,
-        error: `Incorrect delivery code. ${attemptsLeft} attempt(s) remaining.`,
-        attemptsLeft
-      };
-    }
-
-    // Success! Mark delivered and release payout
-    order.status = 'delivered';
-    order.paymentStatus = 'payout_released';
-    order.deliveredAt = new Date().toISOString();
-
-    // Increment seller's sales count
-    const sellerUser = this.users.find((u) => u.id === order.sellerId);
-    if (sellerUser) {
-      sellerUser.salesCount = (sellerUser.salesCount || 0) + 1;
-    }
-
-    // Record in Payout Ledger
-    const payout: PayoutRecord = {
-      id: `payout_${Date.now()}`,
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      sellerId: order.sellerId,
-      sellerName: order.sellerName,
-      bankName: sellerUser?.bankDetails?.bankName || 'Access Bank Nigeria',
-      accountNumberMasked: sellerUser?.bankDetails?.accountNumberMasked || '******4819',
-      amount: order.sellerPayoutAmount,
-      commissionDeducted: order.platformCommission,
-      status: 'confirmed',
-      idempotencyKey: `payout_${order.id}_${Date.now()}`,
-      reference: `PAYOUT_CONFIRMED_${Math.random().toString(36).substring(2, 9).toUpperCase()}`,
-      initiatedAt: new Date().toISOString(),
-      confirmedAt: new Date().toISOString()
-    };
-
-    this.payouts.unshift(payout);
-    this.save();
-
-    updateOrderInFirestore(order.id, {
-      status: 'delivered',
-      paymentStatus: 'payout_released',
-      deliveredAt: order.deliveredAt
-    }).catch((err) => {
-      console.warn('Firestore delivery order update warning:', err);
-    });
-
-    return { success: true, order };
   }
 
   // --- Seller Rating & Review System ---
@@ -868,6 +941,18 @@ class Store {
     }
 
     this.save();
+
+    // Persist dispute resolution to Firestore
+    updateOrderInFirestore(order.id, {
+      status: order.status,
+      paymentStatus: order.paymentStatus
+    }).catch((err) => console.warn('Firestore dispute order update warning:', err));
+
+    updateComplaintInFirestore(complaint.id, {
+      status: complaint.status,
+      resolutionNote: note
+    }).catch((err) => console.warn('Firestore dispute complaint update warning:', err));
+
     return true;
   }
 
@@ -968,6 +1053,22 @@ class Store {
     });
 
     this.save();
+
+    // Persist approval state to Firestore
+    updateVerificationInFirestore(req.id, {
+      status: 'approved',
+      rejectionReason: undefined
+    }).catch((err) => console.warn('Firestore verification approval warning:', err));
+
+    if (user) {
+      updateUserInFirestore(user.id, {
+        isVerifiedSeller: true,
+        sellerVerificationStatus: 'verified',
+        role: 'seller',
+        bankDetails: user.bankDetails
+      }).catch((err) => console.warn('Firestore user verification update warning:', err));
+    }
+
     return true;
   }
 
@@ -984,9 +1085,18 @@ class Store {
       if (this.currentUser.id === user.id) {
         this.currentUser.sellerVerificationStatus = 'rejected';
       }
+      updateUserInFirestore(user.id, {
+        sellerVerificationStatus: 'rejected'
+      }).catch((err) => console.warn('Firestore user verification rejection warning:', err));
     }
 
     this.save();
+
+    updateVerificationInFirestore(req.id, {
+      status: 'rejected',
+      rejectionReason: reason
+    }).catch((err) => console.warn('Firestore verification rejection warning:', err));
+
     return true;
   }
 

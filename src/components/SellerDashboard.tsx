@@ -96,8 +96,9 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
     setIsSubmittingOtp(false);
 
     if (result.success) {
+      const payoutText = result.order?.sellerPayoutAmount ? formatNaira(result.order.sellerPayoutAmount) : 'Payout';
       setOtpSuccessMessage(
-        `Delivery confirmed! ${formatNaira(result.order!.sellerPayoutAmount)} credited to your wallet (3% platform fee capped at ₦2,000 deducted).`
+        `Delivery confirmed! ${payoutText} credited to your wallet (3% platform fee capped at ₦2,000 deducted).`
       );
       setTimeout(() => {
         setSelectedOrderForHandover(null);

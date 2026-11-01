@@ -41,14 +41,16 @@ export const MyOrdersModal: React.FC<MyOrdersModalProps> = ({
   if (!isOpen) return null;
 
   const handleCopyCode = (order: Order) => {
-    if (order.deliveryOtpForBuyer) {
-      navigator.clipboard.writeText(order.deliveryOtpForBuyer);
+    const buyerOtp = store.getBuyerOtp(order.id) || order.deliveryOtpForBuyer;
+    if (buyerOtp) {
+      navigator.clipboard.writeText(buyerOtp);
       setCopiedOrderId(order.id);
       setTimeout(() => setCopiedOrderId(null), 2000);
     }
   };
 
   const handleDownloadReceipt = (order: Order) => {
+    const buyerOtp = store.getBuyerOtp(order.id) || order.deliveryOtpForBuyer;
     const receiptContent = `===========================================
 ABBASON HUB — OFFICIAL CAMPUS RECEIPT
 "Everything you imagined."
@@ -60,7 +62,7 @@ PAYMENT STATUS: CONFIRMED & SECURED IN PAYLUK ESCROW
 
 -------------------------------------------
 YOUR SECRET DELIVERY CONFIRMATION CODE:
->>>  ${order.deliveryOtpForBuyer || '••••••'}  <<<
+>>>  ${buyerOtp || '••••••'}  <<<
 -------------------------------------------
 SECURITY INSTRUCTION:
 Do NOT share this code with the seller beforehand!
@@ -194,7 +196,7 @@ Need help? Contact: support@abbasonhub.com
 
                         <div className="flex items-center gap-2 shrink-0">
                           <span className="font-mono text-2xl font-black text-[#C8A96A] tracking-widest bg-[#0B1120] px-3.5 py-1.5 rounded-xl border border-[#C8A96A]/40 shadow">
-                            {order.deliveryOtpForBuyer || '••••••'}
+                            {store.getBuyerOtp(order.id) || order.deliveryOtpForBuyer || '••••••'}
                           </span>
                           <button
                             onClick={() => handleCopyCode(order)}

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Order } from '../types';
 import { formatNaira, formatDate } from '../utils/currency';
+import { store } from '../services/store';
 
 interface OrderReceiptModalProps {
   order: Order | null;
@@ -36,10 +37,11 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
   if (!order) return null;
 
   const isDelivered = order.status === 'delivered';
+  const buyerOtp = (order && store.getBuyerOtp(order.id)) || order?.deliveryOtpForBuyer;
 
   const handleCopyCode = () => {
-    if (order.deliveryOtpForBuyer) {
-      navigator.clipboard.writeText(order.deliveryOtpForBuyer);
+    if (buyerOtp) {
+      navigator.clipboard.writeText(buyerOtp);
       setCopiedOtp(true);
       setTimeout(() => setCopiedOtp(false), 2500);
     }
@@ -57,7 +59,7 @@ PAYMENT STATUS: CONFIRMED & SECURED IN PAYLUK ESCROW
 
 -------------------------------------------
 YOUR SECRET DELIVERY CONFIRMATION CODE:
->>>  ${order.deliveryOtpForBuyer || '••••••'}  <<<
+>>>  ${buyerOtp || '••••••'}  <<<
 -------------------------------------------
 SECURITY INSTRUCTION:
 Do NOT share this code with the seller beforehand!
@@ -162,7 +164,7 @@ Need help? Contact: support@abbasonhub.com
             {/* The Big 6-Digit Monospace Display */}
             <div className="my-3 inline-flex items-center justify-center">
               <div className="font-mono text-3xl sm:text-5xl font-light text-[#E9E6DF] tracking-[0.3em] bg-[#020406]/90 px-6 sm:px-8 py-3 rounded-[4px] border border-[#C8A96A]/60 shadow-inner select-all">
-                {order.deliveryOtpForBuyer || '••••••'}
+                {buyerOtp || '••••••'}
               </div>
             </div>
 

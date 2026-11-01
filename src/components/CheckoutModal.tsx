@@ -40,8 +40,24 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   if (!isOpen || cart.length === 0) return null;
 
+  // Group cart items strictly by vendor for accurate multi-vendor fee calculations
+  const vendorMap = new Map<string, typeof cart>();
+  cart.forEach((item) => {
+    const sId = item.product.sellerId;
+    if (!vendorMap.has(sId)) vendorMap.set(sId, []);
+    vendorMap.get(sId)!.push(item);
+  });
+  const vendorCount = vendorMap.size;
+
+  let totalDeliveryFee = 0;
+  vendorMap.forEach((vendorItems) => {
+    if (deliveryConfig.fulfillmentType === 'seller_delivers') {
+      totalDeliveryFee += Math.max(...vendorItems.map((i) => i.product.deliveryFee));
+    }
+  });
+
   const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
-  const deliveryFee = deliveryConfig.fulfillmentType === 'seller_delivers' ? (cart[0]?.product.deliveryFee || 0) : 0;
+  const deliveryFee = totalDeliveryFee;
   const gatewayFee = calculateGatewayFee(subtotal + deliveryFee);
   const totalAmount = subtotal + deliveryFee + gatewayFee;
 
@@ -51,14 +67,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       // Simulate network latency of payment processing
       await new Promise((resolve) => setTimeout(resolve, 1400));
 
-      const newOrder = await store.createOrder({
+      const createdOrders = await store.checkoutOrders({
         fulfillmentType: deliveryConfig.fulfillmentType,
         deliveryInstructions: deliveryConfig.deliveryInstructions,
         paymentMethod
       });
 
       setIsProcessing(false);
-      onPaymentSuccess(newOrder);
+      onPaymentSuccess(createdOrders[0]);
     } catch (err) {
       console.error('Checkout error:', err);
       setIsProcessing(false);
@@ -117,6 +133,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               <span>Items subtotal ({cart.length} item{cart.length === 1 ? '' : 's'})</span>
               <span className="text-[#E9E6DF] tabular-nums font-mono">{formatNaira(subtotal)}</span>
             </div>
+            {vendorCount > 1 && (
+              <div className="py-1 px-2.5 rounded-lg bg-[#C8A96A]/10 border border-[#C8A96A]/30 text-[10px] text-[#C8A96A] flex items-center justify-between">
+                <span>Multi-Vendor Checkout ({vendorCount} sellers)</span>
+                <span>{vendorCount} separate escrow orders</span>
+              </div>
+            )}
             {deliveryFee > 0 && (
               <div className="flex justify-between text-[#8C9399] font-light">
                 <span>Campus delivery fee</span>
