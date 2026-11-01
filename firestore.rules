@@ -1,0 +1,142 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny all unspecified reads and writes
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection Health Check Document
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // --- Primitive Helper Functions ---
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Platform Super Admin for Abbason Hub
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'chukwuagoziemgracious@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // --- Entity Validation Helpers ---
+    function isValidProduct(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.sellerId is string && data.sellerId.size() <= 128 &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 180 &&
+             data.price is number && data.price >= 0 &&
+             data.category is string && data.category.size() <= 64 &&
+             data.condition in ['new', 'used_like_new', 'used_good'] &&
+             data.status in ['pending_review', 'approved', 'rejected'];
+    }
+
+    function isValidOrder(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.orderNumber is string && data.orderNumber.size() <= 32 &&
+             data.buyerId is string && data.buyerId.size() <= 128 &&
+             data.sellerId is string && data.sellerId.size() <= 128 &&
+             data.totalAmount is number && data.totalAmount >= 0 &&
+             data.status in ['paid_awaiting_delivery', 'delivered', 'disputed', 'cancelled'] &&
+             data.paymentStatus in ['escrow_held', 'payout_released', 'refunded'];
+    }
+
+    function isValidUser(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 120 &&
+             data.email is string && data.email.size() <= 120 &&
+             data.role in ['student', 'seller', 'admin'];
+    }
+
+    function isValidReview(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.sellerId is string && data.sellerId.size() <= 128 &&
+             data.buyerId is string && data.buyerId.size() <= 128 &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() <= 1000;
+    }
+
+    function isValidComplaint(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.orderId is string && data.orderId.size() <= 128 &&
+             data.buyerId is string && data.buyerId.size() <= 128 &&
+             data.sellerId is string && data.sellerId.size() <= 128 &&
+             data.reason is string && data.reason.size() <= 120 &&
+             data.status in ['open', 'resolved_refund', 'resolved_payout'];
+    }
+
+    function isValidVerification(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.matricNumber is string && data.matricNumber.size() <= 64 &&
+             data.status in ['pending', 'approved', 'rejected'];
+    }
+
+    // --- Collection Security Rules ---
+
+    // 1. Marketplace Products (Public catalog browsing with schema validation on writes)
+    match /products/{productId} {
+      allow get, list: if true;
+      allow create: if isValidId(productId) && isValidProduct(incoming());
+      allow update: if isValidId(productId) && isValidProduct(incoming());
+      allow delete: if isValidId(productId) && (isAdmin() || (isSignedIn() && existing().sellerId == request.auth.uid));
+    }
+
+    // 2. Escrow Orders (Marketplace order sync and fulfillment)
+    match /orders/{orderId} {
+      allow get, list: if true;
+      allow create: if isValidId(orderId) && isValidOrder(incoming());
+      allow update: if isValidId(orderId) && isValidOrder(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 3. User Profiles (PII Protection)
+    match /users/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isValidUser(incoming());
+      allow update: if isValidId(userId) && isValidUser(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 4. Seller Reviews (Campus feedback)
+    match /reviews/{reviewId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(reviewId) && isValidReview(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 5. Escrow Complaints & Disputes
+    match /complaints/{complaintId} {
+      allow get, list: if true;
+      allow create: if isValidId(complaintId) && isValidComplaint(incoming());
+      allow update: if isValidId(complaintId) && isValidComplaint(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 6. Student Seller Verifications
+    match /verifications/{verificationId} {
+      allow get, list: if true;
+      allow create: if isValidId(verificationId) && isValidVerification(incoming());
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+  }
+}
