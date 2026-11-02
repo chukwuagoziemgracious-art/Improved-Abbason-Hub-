@@ -54,8 +54,8 @@ export const Hero: React.FC<HeroProps> = ({
 
           {/* Clean, Non-repetitive Subtitle */}
           <p className="text-[#8C9399] text-sm sm:text-base leading-relaxed max-w-xl mb-8 font-light">
-            Buy and sell laptops, textbooks, fashion, and hostel essentials with complete confidence. Secured with{' '}
-            <span className="text-[#C8A96A] font-medium">Payluk Escrow</span> and verified 6-digit delivery codes.
+            Buy and sell laptops, textbooks, fashion, and hostel essentials with complete confidence. Inspect your items in person before paying seamlessly via{' '}
+            <span className="text-[#C8A96A] font-medium">Paystack</span>.
           </p>
 
           {/* Search Input Box */}
@@ -79,7 +79,7 @@ export const Hero: React.FC<HeroProps> = ({
             </div>
           </form>
 
-          {/* Trust Value Props (Explicit Payluk Escrow Mention & Clean Phrasing) */}
+          {/* Trust Value Props */}
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2.5 text-xs text-[#8C9399] font-light">
             <div className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-[#C8A96A]" />
@@ -87,11 +87,11 @@ export const Hero: React.FC<HeroProps> = ({
             </div>
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Safe 6-digit delivery OTP</span>
+              <span>Inspect First, Pay on Delivery</span>
             </div>
             <div className="flex items-center gap-2">
               <Lock className="w-3.5 h-3.5 text-[#C8A96A]" />
-              <span className="text-[#C8A96A] font-medium">Payluk Escrow Protected</span>
+              <span className="text-[#C8A96A] font-medium">Paystack Verified Settlement</span>
             </div>
           </div>
         </div>

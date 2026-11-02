@@ -37,8 +37,8 @@ export const WhatsAppContactModal: React.FC<WhatsAppContactModalProps> = ({
     },
     {
       id: 'payluk',
-      label: 'Payluk Escrow & Payment',
-      prefill: 'Hello Abbason Hub! I have a question regarding Payluk Escrow and my transaction.',
+      label: 'Payment & Order Help',
+      prefill: 'Hello Abbason Hub! I have a question regarding my order payment and inspection.',
     },
   ];
 

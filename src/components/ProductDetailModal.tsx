@@ -216,16 +216,16 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 </div>
               </div>
 
-              {/* Protected Handshake Escrow */}
+              {/* Inspect on Delivery Guarantee */}
               <div className="rounded-2xl bg-white/[0.03] border border-[#C8A96A]/30 p-4 text-xs">
                 <div className="flex items-start gap-3">
                   <div className="w-8 h-8 rounded-xl bg-[#C8A96A]/15 border border-[#C8A96A]/30 flex items-center justify-center shrink-0 text-[#C8A96A]">
                     <ShieldCheck className="w-5 h-5" />
                   </div>
                   <div>
-                    <div className="font-semibold text-[#E9E6DF]">Protected Payluk Escrow</div>
+                    <div className="font-semibold text-[#E9E6DF]">Inspect-on-Delivery Guarantee</div>
                     <p className="text-[#8C9399] text-[11px] mt-0.5 leading-relaxed font-light">
-                      Your payment is held safely in Payluk Escrow. When you meet the seller, inspect your item first. Only share your secret 6-digit confirmation code once you are completely satisfied.
+                      Pay only the small transport fee upfront to dispatch the seller. When the item arrives at your hostel, inspect it thoroughly in person before paying via Paystack.
                     </p>
                   </div>
                 </div>
@@ -318,7 +318,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
             }}
             className="flex-1 py-3 px-4 rounded-xl bg-[#C8A96A] hover:bg-[#d8bb7d] text-[#020406] font-semibold text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-2 transition-all duration-300 shadow-xl cursor-pointer"
           >
-            <span>Buy Now (Payluk Escrow)</span>
+            <span>Buy Now (Inspect on Delivery)</span>
           </button>
         </div>
       </div>

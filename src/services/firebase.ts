@@ -33,9 +33,29 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
-// Google Auth Provider
+// Google Auth Provider (Google Auth is the provisioned authentication provider on this Cloud project)
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+// Self-healing auth listener: If a cached unprovisioned token exists in IndexedDB that causes Token Service errors, clear it immediately
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    try {
+      await user.getIdToken();
+    } catch (err: any) {
+      if (
+        err?.message?.includes('token-service-api') ||
+        err?.message?.includes('securetoken.googleapis.com') ||
+        err?.code === 'auth/internal-error'
+      ) {
+        console.warn('[Abbason Hub] Resetting unprovisioned auth credential to ensure clean Firestore connectivity.');
+        try {
+          await firebaseSignOut(auth);
+        } catch {}
+      }
+    }
+  }
+});
 
 // Operation types for error reporting
 export enum OperationType {
@@ -65,8 +85,22 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errMessage = error instanceof Error ? error.message : String(error);
+
+  // If error is related to unprovisioned token service, sign out to recover
+  if (
+    errMessage.includes('token-service-api') ||
+    errMessage.includes('securetoken.googleapis.com')
+  ) {
+    console.warn('[Abbason Hub] Auth token service unavailable, resetting session.');
+    try {
+      firebaseSignOut(auth);
+    } catch {}
+    return;
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -81,17 +115,26 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.warn('Firestore Warning/Error: ', JSON.stringify(errInfo));
 }
 
-// Connection check on boot
+// Connection check on boot with self-healing recovery
 export async function testConnection(): Promise<boolean> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
     console.log('[Abbason Hub] Firebase Firestore connected successfully.');
     return true;
-  } catch (error) {
+  } catch (error: any) {
+    const msg = error?.message || String(error);
+    if (msg.includes('token-service-api') || msg.includes('securetoken.googleapis.com')) {
+      console.warn('[Abbason Hub] Clearing stale token and retrying connection check.');
+      try {
+        await firebaseSignOut(auth);
+        await getDocFromServer(doc(db, 'test', 'connection'));
+        console.log('[Abbason Hub] Firebase Firestore connected successfully after token reset.');
+        return true;
+      } catch {}
+    }
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('[Abbason Hub] Running in offline mode; local cache active.');
     } else {
@@ -112,12 +155,25 @@ export async function loginWithGoogle(): Promise<FirebaseUser | null> {
   }
 }
 
+export function onAuthChange(callback: (user: FirebaseUser | null) => void): Unsubscribe {
+  return onAuthStateChanged(auth, callback);
+}
+
 export async function logoutUser(): Promise<void> {
   try {
     await firebaseSignOut(auth);
   } catch (error) {
     console.error('Logout error:', error);
     throw error;
+  }
+}
+
+export async function saveUserToFirestore(user: User): Promise<void> {
+  const path = `users/${user.id}`;
+  try {
+    await setDoc(doc(db, 'users', user.id), user);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
@@ -154,13 +210,26 @@ export function subscribeToProducts(
 
 export function subscribeToOrders(
   onUpdate: (orders: Order[]) => void,
-  userId?: string
+  userId?: string,
+  userEmail?: string,
+  role?: string
 ): Unsubscribe {
   const path = 'orders';
   try {
-    const q = userId
-      ? query(collection(db, path), where('buyerId', '==', userId))
-      : query(collection(db, path));
+    const isOwnerAdmin = userEmail?.toLowerCase() === 'chukwuagoziemgracious@gmail.com';
+    let q;
+    if (isOwnerAdmin) {
+      q = query(collection(db, path), limit(150));
+    } else if (userId) {
+      if (role === 'seller') {
+        q = query(collection(db, path), where('sellerId', '==', userId), limit(100));
+      } else {
+        q = query(collection(db, path), where('buyerId', '==', userId), limit(100));
+      }
+    } else {
+      // Unauthenticated callers should not trigger full scan error
+      return () => {};
+    }
 
     return onSnapshot(
       q,

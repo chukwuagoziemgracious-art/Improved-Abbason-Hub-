@@ -394,7 +394,7 @@ export const INITIAL_SELLER_REVIEWS: SellerReview[] = [
     buyerName: 'Segun Balogun',
     campusName: 'UNILAG (Akoka)',
     rating: 5,
-    comment: 'Met at New Hall arena. iPhone is spotless and factory unlocked. Handshake escrow gave me complete peace of mind.',
+    comment: 'Met at New Hall arena. iPhone is spotless and factory unlocked. Inspecting on delivery gave me complete peace of mind.',
     createdAt: '2026-10-11T18:20:00Z',
     verifiedPurchase: true
   }
@@ -627,31 +627,38 @@ export const INITIAL_ORDERS: Order[] = [
     campusName: 'Nnamdi Azikiwe University (UNIZIK)',
     items: [
       {
+        id: 'item_seed_1',
+        itemCode: 'ITM-9F24',
         productId: 'prod_rechargeable_fan',
         title: 'Lontor 16-Inch Solar Rechargeable Standing Fan + Remote Control',
         price: 38000,
         quantity: 1,
-        image: 'https://images.unsplash.com/photo-1618941716939-553df3c6c278?auto=format&fit=crop&w=600&q=65'
+        image: 'https://images.unsplash.com/photo-1618941716939-553df3c6c278?auto=format&fit=crop&w=600&q=65',
+        status: 'paid',
+        paidAt: '2026-10-14T07:45:00Z',
+        paidAmount: 38000
       }
     ],
     subtotal: 38000,
     deliveryFee: 1200,
     gatewayFee: 670,
     totalAmount: 39870,
+    upfrontDeliveryFee: 1200,
+    upfrontGatewayFee: 118,
+    upfrontTotalPaid: 1318,
+    itemsTotalDueOnDelivery: 38000,
+    itemsTotalPaid: 38000,
+    paymentMode: 'inspect_and_pay',
     platformCommission: 1140, // 3% of 38,000 (below 2,000 cap)
     sellerPayoutAmount: 38060, // 38,000 - 1,140 + 1,200
     fulfillmentType: 'seller_delivers',
     deliveryInstructions: 'Deliver to Diamond Valley Hostel Gate, Room 14',
     paymentMethod: 'card',
-    paymentStatus: 'payout_released',
-    otpHash: 'd7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592',
-    otpSalt: 'abbason_salt_seed_1001',
-    otpExpiresAt: Date.now() + 86400000,
-    otpFailedAttempts: 0,
-    status: 'delivered',
-    deliveryOtpForBuyer: '482910',
+    paymentStatus: 'paid_completed',
+    status: 'paid_completed',
     hasBuyerReviewed: true,
     createdAt: '2026-10-14T06:00:00Z',
-    deliveredAt: '2026-10-14T07:45:00Z'
+    deliveredAt: '2026-10-14T07:45:00Z',
+    completedAt: '2026-10-14T07:45:00Z'
   }
 ];

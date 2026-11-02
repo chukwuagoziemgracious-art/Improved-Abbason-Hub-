@@ -95,7 +95,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-[#8C9399] font-light">
-                Moderation Queue · Escrow Ledger · Commission Monitor
+                Moderation Queue · Transaction Ledger · Commission Monitor
               </p>
             </div>
           </div>
@@ -145,7 +145,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/[0.08]">
-            <div className="text-[10px] uppercase font-bold text-emerald-400">Escrow Held</div>
+            <div className="text-[10px] uppercase font-bold text-emerald-400">Pending Inspection</div>
             <div className="text-base sm:text-lg font-bold text-emerald-300 mt-0.5 tabular-nums font-serif">
               {formatNaira(metrics.pendingEscrowAmount)}
             </div>
@@ -221,7 +221,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             }`}
           >
             <Package className="w-4 h-4" />
-            <span>Order & Escrow Audit ({allOrders.length})</span>
+            <span>Order & Payment Audit ({allOrders.length})</span>
           </button>
         </div>
 
@@ -398,7 +398,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           Dispute on #{comp.orderNumber}
                         </span>
                         <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-300 font-bold text-[10px]">
-                          Escrow Frozen
+                          Under Review
                         </span>
                       </div>
 
@@ -435,7 +435,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           )}
 
-          {/* TAB 4: ORDER & ESCROW AUDIT */}
+          {/* TAB 4: ORDER & PAYMENT AUDIT */}
           {activeTab === 'orders' && (
             <div className="space-y-3">
               <div className="text-xs text-[#8C9399] font-light">

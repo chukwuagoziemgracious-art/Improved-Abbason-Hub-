@@ -243,23 +243,23 @@ export const BasketDrawer: React.FC<BasketDrawerProps> = ({
                 </div>
               </div>
 
-              {/* Protected Delivery Code Guarantee Card */}
+              {/* Inspect on Delivery Guarantee Card */}
               <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-[#C8A96A]/30 text-xs flex items-start gap-2.5">
                 <ShieldCheck className="w-4 h-4 text-[#C8A96A] shrink-0 mt-0.5" />
                 <div className="text-[11px] text-slate-300 leading-snug">
-                  <strong className="text-[#C8A96A]">Protected Handshake:</strong> Upon payment, you receive a secret 6-digit delivery confirmation code. Only share it after in-person inspection!
+                  <strong className="text-[#C8A96A]">Inspect on Delivery:</strong> Pay only the delivery transport fee now. Inspect your package thoroughly at your hostel before paying the seller in the app.
                 </div>
               </div>
             </>
           )}
 
-          {/* Banner matching bottom of Screenshot */}
+          {/* Banner matching bottom */}
           <div className="p-4 rounded-2xl bg-[#0B1120] border border-white/[0.08] text-xs space-y-1.5">
             <h4 className="font-medium text-[#E9E6DF] text-xs">
               Buy from your campus community
             </h4>
             <p className="text-[11px] text-[#8C9399] leading-relaxed font-light">
-              Prices are set by each verified seller. Payments are securely protected by Payluk Escrow until verified OTP delivery.
+              Prices are set by verified student sellers. Pay effortlessly upon delivery via Paystack.
             </p>
             <button
               onClick={() => {

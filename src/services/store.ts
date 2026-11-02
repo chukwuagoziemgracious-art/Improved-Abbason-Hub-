@@ -11,7 +11,9 @@ import {
   PlatformMetrics,
   Role,
   DeliveryOption,
-  SellerReview
+  SellerReview,
+  OrderItem,
+  OrderStatus
 } from '../types';
 import { CAMPUSES, CATEGORIES, INITIAL_USERS, INITIAL_PRODUCTS, INITIAL_ORDERS, INITIAL_SELLER_REVIEWS } from '../data/seedData';
 import { calculatePlatformCommission, calculateGatewayFee } from '../utils/currency';
@@ -340,6 +342,45 @@ class Store {
     this.save();
   }
 
+  public authenticateWithPassword(
+    email: string,
+    pass: string
+  ): { success: boolean; error?: string; user?: User } {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      return { success: false, error: 'Please enter your email.' };
+    }
+    if (cleanEmail === 'chukwuagoziemgracious@gmail.com') {
+      return { success: false, error: 'Platform Owner account must sign in via Google Authentication.' };
+    }
+    if (!pass || pass.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters.' };
+    }
+
+    const passwordsMap: Record<string, string> = JSON.parse(
+      localStorage.getItem('abbason_student_passwords_v1') || '{}'
+    );
+
+    const user = this.users.find((u) => u.email.toLowerCase() === cleanEmail);
+    if (!user) {
+      return { success: false, error: 'Student account not found. Please register first.' };
+    }
+
+    const savedPass = passwordsMap[cleanEmail];
+    if (savedPass && savedPass !== pass) {
+      return { success: false, error: 'Incorrect password for this student account.' };
+    }
+
+    // If initial login for pre-seeded student without password set, record the password now
+    if (!savedPass) {
+      passwordsMap[cleanEmail] = pass;
+      localStorage.setItem('abbason_student_passwords_v1', JSON.stringify(passwordsMap));
+    }
+
+    this.setCurrentUser(user);
+    return { success: true, user };
+  }
+
   public registerUser(data: {
     name: string;
     email: string;
@@ -348,12 +389,14 @@ class Store {
     campusId: string;
     hostel: string;
     storeName?: string;
+    password?: string;
   }): User {
+    const cleanEmail = data.email.trim().toLowerCase();
     const campus = this.campuses.find((c) => c.id === data.campusId) || this.campuses[0];
     const newUser: User = {
       id: `user_${Date.now()}`,
       name: data.name,
-      email: data.email,
+      email: cleanEmail,
       phone: data.phone,
       role: data.role,
       campusId: campus.id,
@@ -367,6 +410,15 @@ class Store {
       rating: 5.0,
       reviewsCount: 0
     };
+
+    if (data.password) {
+      const passwordsMap: Record<string, string> = JSON.parse(
+        localStorage.getItem('abbason_student_passwords_v1') || '{}'
+      );
+      passwordsMap[cleanEmail] = data.password;
+      localStorage.setItem('abbason_student_passwords_v1', JSON.stringify(passwordsMap));
+    }
+
     this.users.push(newUser);
     this.currentUser = newUser;
     this.save();
@@ -573,7 +625,17 @@ class Store {
       throw new Error('Basket is empty');
     }
 
-    // Group cart items strictly by sellerId for vendor-isolated escrow orders
+    // Pre-checkout stock verification
+    for (const item of this.cart) {
+      const liveProduct = this.products.find((p) => p.id === item.product.id) || item.product;
+      if (liveProduct.stock < item.quantity) {
+        throw new Error(
+          `Insufficient stock for "${liveProduct.title}". Only ${liveProduct.stock} unit(s) available.`
+        );
+      }
+    }
+
+    // Group cart items strictly by sellerId for vendor-isolated parcels
     const vendorMap = new Map<string, CartItem[]>();
     for (const item of this.cart) {
       const sId = item.product.sellerId;
@@ -594,25 +656,33 @@ class Store {
         ? Math.max(...items.map((item) => item.product.deliveryFee))
         : 0;
 
-      // Platform commission capped at ₦2,000 max
+      // Platform commission: 3% capped at ₦2,000 max
       const platformCommission = calculatePlatformCommission(subtotal);
-      // Consistent Gateway Fee: calculated on total order transaction (subtotal + deliveryFee)
-      const gatewayFee = calculateGatewayFee(subtotal + deliveryFee);
-      const totalAmount = subtotal + deliveryFee + gatewayFee;
-      const sellerPayoutAmount = subtotal - platformCommission + deliveryFee;
 
-      // Cryptographic 6-digit OTP generation and SHA-256 salting
-      const plaintextOtp = generateDeliveryOtp();
-      const otpSalt = generateSalt();
-      const otpHash = await hashOtp(plaintextOtp, otpSalt);
-      const otpExpiresAt = Date.now() + 72 * 60 * 60 * 1000; // 72 hours expiry
+      // Upfront Delivery Commitment Fee + small gateway fee
+      const upfrontDeliveryFee = deliveryFee;
+      const upfrontGatewayFee = calculateGatewayFee(upfrontDeliveryFee);
+      const upfrontTotalPaid = upfrontDeliveryFee + upfrontGatewayFee;
 
-      // Collision-resistant unique IDs
+      // Item total due strictly upon physical hostel delivery & inspection
+      const itemsTotalDueOnDelivery = subtotal;
+      const totalAmount = upfrontTotalPaid + itemsTotalDueOnDelivery;
+      const sellerPayoutAmount = subtotal - platformCommission;
+
       const orderId = `order_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const orderNumber = `AB-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
-      // SECURITY INVARIANT: Save plaintext OTP into buyer's local secure vault ONLY
-      this.saveBuyerOtp(orderId, plaintextOtp);
+      // Assign unique item-level tracking codes for inspection & itemized payment
+      const orderItems: OrderItem[] = items.map((item, idx) => ({
+        id: `item_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+        itemCode: `ITM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+        productId: item.product.id,
+        title: item.product.title,
+        price: item.product.price,
+        quantity: item.quantity,
+        image: item.product.images[0] || 'https://images.unsplash.com/photo-1523275335684-37898b6baf30',
+        status: 'pending_inspection'
+      }));
 
       const newOrder: Order = {
         id: orderId,
@@ -625,29 +695,24 @@ class Store {
         sellerName: firstProduct.sellerName,
         campusId: campus.id,
         campusName: campus.name,
-        items: items.map((item) => ({
-          productId: item.product.id,
-          title: item.product.title,
-          price: item.product.price,
-          quantity: item.quantity,
-          image: item.product.images[0]
-        })),
+        items: orderItems,
         subtotal,
         deliveryFee,
-        gatewayFee,
+        gatewayFee: upfrontGatewayFee,
         totalAmount,
+        upfrontDeliveryFee,
+        upfrontGatewayFee,
+        upfrontTotalPaid,
+        itemsTotalDueOnDelivery,
+        itemsTotalPaid: 0,
+        paymentMode: 'inspect_and_pay',
         platformCommission,
         sellerPayoutAmount,
         fulfillmentType: data.fulfillmentType,
         deliveryInstructions: data.deliveryInstructions,
         paymentMethod: data.paymentMethod,
-        paymentStatus: 'escrow_held',
-        otpHash,
-        otpSalt,
-        otpExpiresAt,
-        otpFailedAttempts: 0,
-        status: 'paid_awaiting_delivery',
-        deliveryOtpForBuyer: plaintextOtp, // Keep in local buyer memory for receipt view
+        paymentStatus: 'delivery_fee_paid',
+        status: 'delivery_fee_paid',
         hasBuyerReviewed: false,
         createdAt: new Date().toISOString()
       };
@@ -666,7 +731,7 @@ class Store {
       this.orders.unshift(newOrder);
       createdOrders.push(newOrder);
 
-      // Save to cloud Firestore - plaintext OTP is stripped by saveOrderToFirestore
+      // Save to cloud Firestore
       saveOrderToFirestore(newOrder).catch((err) => {
         console.warn('Firestore order create sync warning:', err);
       });
@@ -675,6 +740,165 @@ class Store {
     this.clearCart();
     this.save();
     return createdOrders;
+  }
+
+  /**
+   * Pay for an individual item in an order after physical delivery & inspection.
+   */
+  public async payOrderItem(
+    orderId: string,
+    itemId: string
+  ): Promise<{ success: boolean; error?: string; order?: Order; item?: OrderItem }> {
+    const order = this.orders.find((o) => o.id === orderId);
+    if (!order) {
+      return { success: false, error: 'Order not found.' };
+    }
+
+    const item = order.items.find((i) => i.id === itemId);
+    if (!item) {
+      return { success: false, error: 'Item not found in order.' };
+    }
+
+    if (item.status === 'paid') {
+      return { success: false, error: 'This item has already been paid for.' };
+    }
+
+    const itemCost = item.price * item.quantity;
+    const ref = `PAYSTACK_ITEM_${item.itemCode}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+    item.status = 'paid';
+    item.paidAt = new Date().toISOString();
+    item.paidAmount = itemCost;
+    item.paymentReference = ref;
+
+    order.itemsTotalPaid = (order.itemsTotalPaid || 0) + itemCost;
+
+    const allPaid = order.items.every((i) => i.status === 'paid');
+    if (allPaid) {
+      order.status = 'paid_completed';
+      order.paymentStatus = 'paid_completed';
+      order.completedAt = new Date().toISOString();
+      order.deliveredAt = new Date().toISOString();
+    } else {
+      order.status = 'partially_paid';
+      order.paymentStatus = 'partially_paid';
+    }
+
+    // Direct settlement to seller ledger
+    const sellerUser = this.users.find((u) => u.id === order.sellerId);
+    if (sellerUser) {
+      sellerUser.salesCount = (sellerUser.salesCount || 0) + 1;
+    }
+
+    const payout: PayoutRecord = {
+      id: `settle_${item.id}_${Date.now()}`,
+      orderId: order.id,
+      orderNumber: `${order.orderNumber} (${item.itemCode})`,
+      sellerId: order.sellerId,
+      sellerName: order.sellerName,
+      bankName: sellerUser?.bankDetails?.bankName || 'Verified Vendor Settlement Account',
+      accountNumberMasked: sellerUser?.bankDetails?.accountNumberMasked || 'Verified Account',
+      amount: itemCost,
+      commissionDeducted: 0,
+      status: 'confirmed',
+      idempotencyKey: `payout_item_${item.id}_${Date.now()}`,
+      reference: ref,
+      initiatedAt: new Date().toISOString(),
+      confirmedAt: new Date().toISOString()
+    };
+    this.payouts.unshift(payout);
+
+    // Sync to Firestore
+    updateOrderInFirestore(order.id, order).catch((err) => {
+      console.warn('Order sync warning on item payment:', err);
+    });
+
+    this.save();
+    return { success: true, order, item };
+  }
+
+  /**
+   * Pay for all remaining unpaid items from a vendor in one consolidated transaction.
+   */
+  public async payVendorOrder(
+    orderId: string
+  ): Promise<{ success: boolean; error?: string; order?: Order }> {
+    const order = this.orders.find((o) => o.id === orderId);
+    if (!order) {
+      return { success: false, error: 'Order not found.' };
+    }
+
+    const unpaidItems = order.items.filter((i) => i.status !== 'paid');
+    if (unpaidItems.length === 0) {
+      return { success: false, error: 'All items in this parcel have already been paid for.' };
+    }
+
+    const now = new Date().toISOString();
+    const batchRef = `PAYSTACK_VENDOR_${order.orderNumber}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+    let totalBatchAmount = 0;
+    unpaidItems.forEach((item) => {
+      const itemCost = item.price * item.quantity;
+      totalBatchAmount += itemCost;
+      item.status = 'paid';
+      item.paidAt = now;
+      item.paidAmount = itemCost;
+      item.paymentReference = batchRef;
+    });
+
+    order.itemsTotalPaid = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.status = 'paid_completed';
+    order.paymentStatus = 'paid_completed';
+    order.completedAt = now;
+    order.deliveredAt = now;
+
+    const sellerUser = this.users.find((u) => u.id === order.sellerId);
+    if (sellerUser) {
+      sellerUser.salesCount = (sellerUser.salesCount || 0) + unpaidItems.length;
+    }
+
+    const payout: PayoutRecord = {
+      id: `settle_vendor_${order.id}_${Date.now()}`,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      sellerId: order.sellerId,
+      sellerName: order.sellerName,
+      bankName: sellerUser?.bankDetails?.bankName || 'Verified Vendor Settlement Account',
+      accountNumberMasked: sellerUser?.bankDetails?.accountNumberMasked || 'Verified Account',
+      amount: totalBatchAmount,
+      commissionDeducted: order.platformCommission || 0,
+      status: 'confirmed',
+      idempotencyKey: `payout_order_${order.id}_${Date.now()}`,
+      reference: batchRef,
+      initiatedAt: now,
+      confirmedAt: now
+    };
+    this.payouts.unshift(payout);
+
+    // Sync to Firestore
+    updateOrderInFirestore(order.id, order).catch((err) => {
+      console.warn('Order sync warning on vendor payment:', err);
+    });
+
+    this.save();
+    return { success: true, order };
+  }
+
+  /**
+   * Update order status during campus transit / delivery arrival
+   */
+  public async updateOrderStatus(orderId: string, status: OrderStatus): Promise<boolean> {
+    const order = this.orders.find((o) => o.id === orderId);
+    if (!order) return false;
+    order.status = status;
+    if (status === 'delivered_pending_inspection' || status === 'delivered') {
+      order.deliveredAt = new Date().toISOString();
+    }
+    updateOrderInFirestore(order.id, { status: order.status, deliveredAt: order.deliveredAt }).catch((err) => {
+      console.warn('Status update sync warning:', err);
+    });
+    this.save();
+    return true;
   }
 
   public async createOrder(data: {

@@ -37,12 +37,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [role, setRole] = useState<Role>('student');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [campusId, setCampusId] = useState(activeCampus.id === 'all' ? 'unizik' : activeCampus.id);
   const [hostel, setHostel] = useState('Campus Hostel Block');
   const [storeName, setStoreName] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
@@ -59,6 +61,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         const existing = store.getUsers().find((u) => u.email.toLowerCase() === fbUser.email?.toLowerCase());
         if (existing) {
+          existing.id = fbUser.uid;
           store.setCurrentUser(existing);
           setFeedback(`Welcome back, ${existing.name}!`);
         } else {
@@ -70,6 +73,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             campusId: campusId || 'unizik',
             hostel: 'Campus Area'
           });
+          registered.id = fbUser.uid;
+          store.setCurrentUser(registered);
           setFeedback(`Account created for ${registered.name}!`);
         }
         setTimeout(() => onClose(), 1200);
@@ -84,49 +89,77 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
 
-    if (isRegister) {
-      if (!name.trim() || !email.trim()) return;
-      const newUser = store.registerUser({
-        name,
-        email,
-        phone: phone || '+234 800 000 0000',
-        role,
-        campusId,
-        hostel,
-        storeName: role === 'seller' ? storeName || `${name}'s Shop` : undefined
-      });
-      setFeedback(`Welcome to Abbason Hub, ${newUser.name}!`);
-      setTimeout(() => {
-        onClose();
-      }, 1000);
-    } else {
-      // Find existing user or switch
-      const existing = store.getUsers().find((u) => u.email.toLowerCase() === email.toLowerCase());
-      if (existing) {
-        store.setCurrentUser(existing);
-        setFeedback(`Logged in as ${existing.name}!`);
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      setFeedback('Please enter your email address.');
+      return;
+    }
+
+    if (!password || password.length < 6) {
+      setFeedback('Password must be at least 6 characters.');
+      return;
+    }
+
+    // Owner protection: cannot be accessed via forms without Google verification
+    if (cleanEmail === 'chukwuagoziemgracious@gmail.com') {
+      setFeedback('Platform Owner access strictly requires Google Authentication.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      if (isRegister) {
+        if (!name.trim()) {
+          setFeedback('Please enter your full name.');
+          setIsSubmitting(false);
+          return;
+        }
+
+        const existing = store.getUsers().find((u) => u.email.toLowerCase() === cleanEmail);
+        if (existing) {
+          setFeedback('An account with this student email already exists. Please switch to Sign In.');
+          setIsSubmitting(false);
+          return;
+        }
+
+        const newUser = store.registerUser({
+          name,
+          email: cleanEmail,
+          phone: phone || '+234 800 000 0000',
+          role,
+          campusId,
+          hostel,
+          storeName: role === 'seller' ? storeName || `${name}'s Shop` : undefined,
+          password
+        });
+
+        setFeedback(`Welcome to Abbason Hub, ${newUser.name}!`);
         setTimeout(() => {
           onClose();
         }, 1000);
       } else {
-        // Register demo profile seamlessly without window.alert
-        const registered = store.registerUser({
-          name: email.split('@')[0],
-          email,
-          phone: '+234 814 000 0000',
-          role: 'student',
-          campusId: campusId || 'unizik',
-          hostel: 'Campus Area'
-        });
-        setFeedback(`Created account for ${registered.name}!`);
+        // Authenticate student with password
+        const authResult = store.authenticateWithPassword(cleanEmail, password);
+        if (!authResult.success) {
+          setFeedback(authResult.error || 'Authentication failed. Please verify credentials.');
+          return;
+        }
+
+        setFeedback(`Welcome back, ${authResult.user?.name}!`);
         setTimeout(() => {
           onClose();
         }, 1000);
       }
+    } catch (err: any) {
+      console.error('Authentication error:', err);
+      setFeedback(err?.message || 'Authentication failed.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -271,27 +304,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
-                  Enter Your Student Email
-                </label>
-                <form onSubmit={handleSubmit} className="flex gap-2">
+              <form onSubmit={handleSubmit} className="space-y-3">
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                    Student Email Address *
+                  </label>
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
                     placeholder="student@university.edu.ng"
-                    className="flex-1 bg-[#0B1120] border border-white/[0.08] focus:border-[#C8A96A] rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none"
+                    className="w-full bg-[#0B1120] border border-white/[0.08] focus:border-[#C8A96A] rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none"
                   />
-                  <button
-                    type="submit"
-                    className="px-4 py-2 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-medium text-xs cursor-pointer shrink-0"
-                  >
-                    Go
-                  </button>
-                </form>
-              </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                    Password *
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    placeholder="••••••••"
+                    className="w-full bg-[#0B1120] border border-white/[0.08] focus:border-[#C8A96A] rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="w-full py-2.5 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-semibold text-xs cursor-pointer shrink-0 shadow-md transition-colors disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Authenticating...' : 'Sign In'}
+                </button>
+              </form>
 
               {/* Quick Profile Switcher for Testing */}
               <div className="pt-2 border-t border-white/[0.08]">
@@ -418,6 +467,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   value={hostel}
                   onChange={(e) => setHostel(e.target.value)}
                   placeholder="e.g. Moremi Hall or Perm Site Lodge"
+                  className="w-full bg-[#0B1120] border border-slate-800 focus:border-[#f3c84b] rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                  Set Account Password * (Min 6 characters)
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  placeholder="••••••••"
                   className="w-full bg-[#0B1120] border border-slate-800 focus:border-[#f3c84b] rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none"
                 />
               </div>

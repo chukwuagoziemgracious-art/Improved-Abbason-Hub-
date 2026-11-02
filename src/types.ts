@@ -6,9 +6,25 @@ export type ProductStatus = 'pending_review' | 'approved' | 'rejected';
 
 export type DeliveryOption = 'seller_delivers' | 'buyer_pickup' | 'both';
 
-export type OrderStatus = 'paid_awaiting_delivery' | 'delivered' | 'disputed' | 'cancelled';
+export type OrderStatus =
+  | 'delivery_fee_paid'
+  | 'in_transit'
+  | 'delivered_pending_inspection'
+  | 'partially_paid'
+  | 'paid_completed'
+  | 'paid_awaiting_delivery'
+  | 'delivered'
+  | 'disputed'
+  | 'cancelled';
 
-export type PaymentStatus = 'escrow_held' | 'payout_released' | 'refunded';
+export type PaymentStatus =
+  | 'delivery_fee_paid'
+  | 'pending_inspection_pay'
+  | 'partially_paid'
+  | 'paid_completed'
+  | 'escrow_held'
+  | 'payout_released'
+  | 'refunded';
 
 export type DisputeStatus = 'open' | 'resolved_refund' | 'resolved_payout';
 
@@ -102,6 +118,20 @@ export interface CartItem {
   quantity: number;
 }
 
+export interface OrderItem {
+  id: string;
+  itemCode: string; // e.g. "ITM-9A4B"
+  productId: string;
+  title: string;
+  price: number;
+  quantity: number;
+  image: string;
+  status: 'pending_inspection' | 'paid' | 'rejected';
+  paidAt?: string;
+  paidAmount?: number;
+  paymentReference?: string;
+}
+
 export interface Order {
   id: string;
   orderNumber: string;
@@ -113,32 +143,33 @@ export interface Order {
   sellerName: string;
   campusId: string;
   campusName: string;
-  items: {
-    productId: string;
-    title: string;
-    price: number;
-    quantity: number;
-    image: string;
-  }[];
-  subtotal: number; // P
-  deliveryFee: number; // D
-  gatewayFee: number; // G (paid by buyer)
-  totalAmount: number; // P + D + G
-  platformCommission: number; // min(P * 0.03, 2000)
-  sellerPayoutAmount: number; // P - platformCommission + D
+  items: OrderItem[];
+  subtotal: number; // Sum of items (P)
+  deliveryFee: number; // Upfront delivery transport fee (D)
+  gatewayFee: number; // Transaction fee paid at checkout
+  totalAmount: number; // Total floor value of everything (P + D + G)
+  upfrontDeliveryFee: number; // Small commitment fee paid upfront
+  upfrontGatewayFee: number;
+  upfrontTotalPaid: number; // What the student paid right now at checkout
+  itemsTotalDueOnDelivery: number; // What the student owes upon physical inspection
+  itemsTotalPaid: number; // What has been paid so far at handoff
+  paymentMode: 'inspect_and_pay' | 'escrow';
+  platformCommission: number;
+  sellerPayoutAmount: number;
   fulfillmentType: 'seller_delivers' | 'buyer_pickup';
   deliveryInstructions: string;
   paymentMethod: 'card' | 'bank_transfer' | 'ussd';
   paymentStatus: PaymentStatus;
-  otpHash: string; // SHA-256 hash of (OTP + salt)
-  otpSalt: string;
-  otpExpiresAt: number;
-  otpFailedAttempts: number;
   status: OrderStatus;
-  deliveryOtpForBuyer?: string; // Plaintext OTP returned ONLY to the authenticated buyer!
+  otpHash?: string;
+  otpSalt?: string;
+  otpExpiresAt?: number;
+  otpFailedAttempts?: number;
+  deliveryOtpForBuyer?: string;
   hasBuyerReviewed?: boolean;
   createdAt: string;
   deliveredAt?: string;
+  completedAt?: string;
 }
 
 export interface Complaint {

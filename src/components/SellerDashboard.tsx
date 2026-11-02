@@ -64,19 +64,30 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
 
   const currentUser = store.getCurrentUser();
   const allOrders = store.getOrders(currentUser.id, 'seller');
-  const pendingHandoverOrders = allOrders.filter((o) => o.status === 'paid_awaiting_delivery');
-  const completedOrders = allOrders.filter((o) => o.status === 'delivered');
+  const pendingHandoverOrders = allOrders.filter(
+    (o) =>
+      o.status === 'delivery_fee_paid' ||
+      o.status === 'in_transit' ||
+      o.status === 'delivered_pending_inspection' ||
+      o.status === 'partially_paid' ||
+      o.status === 'paid_awaiting_delivery'
+  );
+  const completedOrders = allOrders.filter((o) => o.status === 'paid_completed' || o.status === 'delivered');
   const sellerProducts = store.getSellerProducts(currentUser.id);
   const payouts = store.getPayouts().filter((p) => p.sellerId === currentUser.id);
   const sellerReviews = store.getSellerReviews(currentUser.id);
   const ratingSummary = store.getSellerRatingSummary(currentUser.id);
   const isVerified = store.canUserSell(currentUser.id);
 
+  const handleUpdateOrderStatus = async (orderId: string, status: any) => {
+    await store.updateOrderStatus(orderId, status);
+  };
+
   if (!isOpen) return null;
 
   // Wallet metrics
   const availableBalance = completedOrders.reduce((sum, o) => sum + o.sellerPayoutAmount, 0);
-  const pendingEscrow = pendingHandoverOrders.reduce((sum, o) => sum + o.sellerPayoutAmount, 0);
+  const pendingInspection = pendingHandoverOrders.reduce((sum, o) => sum + o.sellerPayoutAmount, 0);
   const totalCommissionPaid = completedOrders.reduce((sum, o) => sum + o.platformCommission, 0);
 
   const handleVerifyOtpSubmit = async (e: React.FormEvent) => {
@@ -279,7 +290,7 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
             <div className="space-y-4">
               <div className="flex items-center justify-between text-xs text-slate-400">
                 <span className="font-semibold text-white uppercase tracking-wider text-[11px]">
-                  Pending Handover Orders (Buyer OTP Required)
+                  Pending Deliveries & Inspection
                 </span>
                 <span>{pendingHandoverOrders.length} order(s) awaiting delivery</span>
               </div>
@@ -288,57 +299,133 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                 <div className="p-8 text-center bg-slate-900/40 rounded-2xl border border-slate-800 text-slate-400 text-xs">
                   <Package className="w-8 h-8 text-slate-600 mx-auto mb-2" />
                   <p className="text-white font-medium">No pending delivery handovers</p>
-                  <p className="mt-1">When buyers purchase your items, their orders appear here for in-person OTP confirmation.</p>
+                  <p className="mt-1">When buyers purchase your items, their orders appear here for delivery and inspection payment.</p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {pendingHandoverOrders.map((order) => (
-                    <div
-                      key={order.id}
-                      className="p-4 rounded-2xl bg-white/[0.03] border border-[#C8A96A]/40 shadow-md text-xs space-y-3"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-white text-sm font-mono">#{order.orderNumber}</span>
-                          <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-600/50 text-amber-300 font-bold text-[10px]">
-                            Escrow Held
+                  {pendingHandoverOrders.map((order) => {
+                    const isPodOrder = order.paymentMode === 'inspect_and_pay' || order.status === 'delivery_fee_paid' || order.status === 'in_transit' || order.status === 'delivered_pending_inspection' || order.status === 'partially_paid';
+                    const hasPayments = (order.itemsTotalPaid || 0) > 0;
+
+                    return (
+                      <div
+                        key={order.id}
+                        className="p-4 rounded-2xl bg-white/[0.03] border border-[#C8A96A]/40 shadow-md text-xs space-y-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white text-sm font-mono">#{order.orderNumber}</span>
+                            {order.status === 'delivery_fee_paid' ? (
+                              <span className="px-2 py-0.5 rounded bg-[#C8A96A]/20 border border-[#C8A96A]/50 text-[#C8A96A] font-bold text-[10px]">
+                                Transport Secured · Ready to Dispatch
+                              </span>
+                            ) : order.status === 'in_transit' ? (
+                              <span className="px-2 py-0.5 rounded bg-blue-950 border border-blue-500/50 text-blue-300 font-bold text-[10px]">
+                                In-Transit to Hostel
+                              </span>
+                            ) : order.status === 'delivered_pending_inspection' ? (
+                              <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-500/50 text-amber-300 font-bold text-[10px]">
+                                Arrived · Buyer Inspecting Goods
+                              </span>
+                            ) : order.status === 'partially_paid' ? (
+                              <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/50 text-emerald-300 font-bold text-[10px]">
+                                Partially Paid (Handover in Progress)
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-600/50 text-amber-300 font-bold text-[10px]">
+                                Pending Inspection
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-slate-400 text-[11px]">
+                            Items Total: <strong className="text-emerald-400 font-bold tabular-nums">{formatNaira(order.subtotal)}</strong>
                           </span>
                         </div>
-                        <span className="text-slate-400 text-[11px]">
-                          Payout: <strong className="text-emerald-400 font-bold tabular-nums">{formatNaira(order.sellerPayoutAmount)}</strong>
-                        </span>
-                      </div>
 
-                      <div className="p-3 rounded-xl bg-[#0B1120] border border-white/[0.08] space-y-1 text-slate-300">
-                        <div className="text-white font-medium">Buyer: {order.buyerName} ({order.buyerPhone})</div>
-                        <div className="text-slate-400 flex items-center gap-1">
-                          <Truck className="w-3.5 h-3.5 text-[#C8A96A]" />
-                          <span>Delivery to: {order.deliveryInstructions}</span>
+                        {/* LIVE PAYMENT CONFIRMATION BANNER FOR SELLER */}
+                        {hasPayments && (
+                          <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-500/50 text-emerald-200 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <span className="font-medium text-[11px]">
+                                Payment for order #{order.orderNumber} confirmed · {formatNaira(order.itemsTotalPaid || 0)} received via Paystack.
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="p-3 rounded-xl bg-[#0B1120] border border-white/[0.08] space-y-2 text-slate-300">
+                          <div className="text-white font-medium">Buyer: {order.buyerName} ({order.buyerPhone})</div>
+                          <div className="text-slate-400 flex items-center gap-1">
+                            <Truck className="w-3.5 h-3.5 text-[#C8A96A]" />
+                            <span>Delivery to: {order.deliveryInstructions || order.buyerHostel}</span>
+                          </div>
+                          
+                          {/* Itemized tracking codes */}
+                          <div className="pt-1 space-y-1">
+                            {order.items.map((i) => (
+                              <div key={i.id} className="flex items-center justify-between text-[11px]">
+                                <span className="text-slate-200 truncate max-w-[220px]">
+                                  {i.title} (x{i.quantity})
+                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono text-[#C8A96A] bg-[#020406] px-1.5 py-0.5 rounded border border-[#C8A96A]/30 text-[10px]">
+                                    {i.itemCode}
+                                  </span>
+                                  <span className={`text-[10px] font-medium ${i.status === 'paid' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                    {i.status === 'paid' ? '✓ Paid' : 'Pending'}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                        <div className="pt-1 text-slate-200">
-                          {order.items.map((i) => `${i.title} (x${i.quantity})`).join(', ')}
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                          <div className="text-[11px] text-[#8C9399]">
+                            Transport: {formatNaira(order.upfrontTotalPaid || order.deliveryFee)} (Paid upfront)
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {order.status === 'delivery_fee_paid' && (
+                              <button
+                                onClick={() => handleUpdateOrderStatus(order.id, 'in_transit')}
+                                className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                <Truck className="w-3.5 h-3.5" />
+                                <span>Mark In-Transit to Hostel</span>
+                              </button>
+                            )}
+
+                            {order.status === 'in_transit' && (
+                              <button
+                                onClick={() => handleUpdateOrderStatus(order.id, 'delivered_pending_inspection')}
+                                className="px-3 py-1.5 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-semibold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Mark Arrived at Hostel</span>
+                              </button>
+                            )}
+
+                            {/* Legacy OTP verification button */}
+                            {order.otpHash && (
+                              <button
+                                onClick={() => {
+                                  setSelectedOrderForHandover(order);
+                                  setSubmittedOtp('');
+                                  setOtpError(null);
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-[#f3c84b] hover:bg-[#eab308] text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow cursor-pointer"
+                              >
+                                <KeyRound className="w-3.5 h-3.5" />
+                                <span>Enter Code</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
-
-                      <div className="flex items-center justify-between pt-1">
-                        <div className="text-[11px] text-[#8C9399]">
-                          Fee capped: {formatNaira(order.platformCommission)} (3%)
-                        </div>
-
-                        <button
-                          onClick={() => {
-                            setSelectedOrderForHandover(order);
-                            setSubmittedOtp('');
-                            setOtpError(null);
-                          }}
-                          className="px-4 py-2 rounded-xl bg-[#f3c84b] hover:bg-[#eab308] text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow cursor-pointer"
-                        >
-                          <KeyRound className="w-3.5 h-3.5" />
-                          <span>Enter Buyer Handshake Code</span>
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -413,7 +500,7 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                     </span>
                   </div>
                   <p className="text-[#8C9399] text-[11px] leading-relaxed font-light">
-                    This dashboard displays automated calculations of your sales and platform commissions. <strong>Abbason Hub does not hold your funds.</strong> Payments are secured in Payluk Escrow and dispatched directly into your selected Nigerian bank account upon buyer OTP delivery verification.
+                    This dashboard displays automated calculations of your sales and platform commissions. <strong>Abbason Hub does not hold your funds.</strong> Payments are settled directly via Paystack into your selected Nigerian bank account once the student inspects and completes payment in the app.
                   </p>
                 </div>
               </div>
@@ -423,12 +510,12 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                 {/* 1. Pending Balance */}
                 <div className="p-4 rounded-2xl bg-white/[0.03] border border-[#C8A96A]/30">
                   <div className="text-[10px] uppercase font-bold text-[#C8A96A] tracking-wider flex items-center justify-between">
-                    <span>Pending in Escrow</span>
+                    <span>Pending Delivery & Inspection</span>
                     <Clock className="w-3.5 h-3.5 text-[#C8A96A]" />
                   </div>
-                  <div className="text-2xl font-bold text-[#C8A96A] mt-1 tabular-nums font-serif">{formatNaira(pendingEscrow)}</div>
+                  <div className="text-2xl font-bold text-[#C8A96A] mt-1 tabular-nums font-serif">{formatNaira(pendingInspection)}</div>
                   <div className="text-[10px] text-[#8C9399] mt-1 font-light">
-                    {pendingHandoverOrders.length} order(s) awaiting buyer OTP code
+                    {pendingHandoverOrders.length} order(s) awaiting hostel delivery & inspection
                   </div>
                 </div>
 

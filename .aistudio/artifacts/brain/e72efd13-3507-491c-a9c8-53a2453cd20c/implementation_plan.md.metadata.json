@@ -1,6 +1,6 @@
 {
-  "summary":  "Comprehensive security hardening and architectural audit plan addressing all Critical, High, and Lower priority vulnerabilities. Details server-authoritative delivery OTP verification, multi-vendor cart order splitting, stock decrements, strict Firestore ABAC rules (hiding plaintext OTPs, PII, and bank accounts), elimination of client-side admin passcodes in favor of Google OAuth, and consistent fee calculations.",
-  "updatedAt":  "2026-11-01T12:10:03.669869222Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Transition from complex escrow to an Inspect-First Pay-on-Delivery (POD) model:\n1. Upfront delivery commitment fee checkout to protect sellers from ghosting;\n2. Item-level unique tracking codes and vendor-level order grouping;\n3. Post-delivery inspection workflow with dual payment triggers (Pay Vendor Total or Pay Individual Item);\n4. In-app Paystack payment directly crediting the vendor's bank account with live seller confirmation;\n5. Elimination of escrow release OTPs, lockouts, and bypass vulnerabilities.",
+  "updatedAt": "2026-11-02T22:44:21.573910864Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

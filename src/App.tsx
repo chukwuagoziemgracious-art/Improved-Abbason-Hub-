@@ -205,7 +205,7 @@ export default function App() {
         {/* Subtle quick contact note at foot of homepage */}
         <div className="max-w-[1200px] mx-auto px-4 py-8 text-center text-xs text-[#8C9399] border-t border-white/[0.08]">
           <p className="flex flex-wrap items-center justify-center gap-1.5 font-light">
-            <span>Have questions or need help with delivery OTP or Payluk Escrow?</span>
+            <span>Have questions or need help with delivery or Paystack payment?</span>
             <button
               onClick={() => setWhatsAppModalOpen(true)}
               className="text-[#C8A96A] hover:underline inline-flex items-center gap-1 cursor-pointer font-medium tracking-wide"
@@ -239,7 +239,7 @@ export default function App() {
               <span>WhatsApp: 08066950607</span>
             </button>
             <span className="hidden sm:inline text-white/[0.15]">·</span>
-            <span>Escrow Partner: <strong className="text-[#C8A96A] font-medium">Payluk</strong> (Ready for integration)</span>
+            <span>Payment: <strong className="text-[#C8A96A] font-medium">Paystack</strong> (Inspect & Pay on Delivery)</span>
             <span className="hidden sm:inline text-white/[0.15]">·</span>
             <button
               onClick={handleOpenAdminPortal}
@@ -294,7 +294,7 @@ export default function App() {
         onOpenSellerDashboard={handleOpenSellerFlow}
       />
 
-      {/* 3. Checkout Modal (Secured with Payluk Escrow) */}
+      {/* 3. Checkout Modal */}
       <CheckoutModal
         isOpen={checkoutOpen}
         onClose={() => setCheckoutOpen(false)}
@@ -302,7 +302,7 @@ export default function App() {
         onPaymentSuccess={handlePaymentSuccess}
       />
 
-      {/* 4. Order Receipt Modal (With Secret 6-Digit Delivery Code & Payluk Escrow) */}
+      {/* 4. Order Receipt Modal */}
       <OrderReceiptModal
         order={activeReceiptOrder}
         onClose={() => setActiveReceiptOrder(null)}

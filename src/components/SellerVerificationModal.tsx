@@ -125,7 +125,7 @@ export const SellerVerificationModal: React.FC<SellerVerificationModalProps> = (
                 Application Under Admin Review
               </h4>
               <p className="text-xs text-slate-300 max-w-sm mx-auto leading-relaxed">
-                Your verification documents have been received by the Abbason Hub Moderation Team. Once approved by the administrator, you will be able to list items and receive escrow payouts immediately.
+                Your verification documents have been received by the Abbason Hub Moderation Team. Once approved by the administrator, you will be able to list items and receive direct Paystack payouts.
               </p>
               <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-left text-xs max-w-sm mx-auto space-y-1 text-slate-400">
                 <div><span className="text-slate-200 font-medium">Applicant:</span> {currentUser.name}</div>
@@ -234,7 +234,7 @@ export const SellerVerificationModal: React.FC<SellerVerificationModalProps> = (
               <div className="space-y-3 p-3.5 rounded-2xl bg-white/[0.03] border border-white/[0.08]">
                 <div className="font-medium text-white text-xs flex items-center gap-1.5 uppercase tracking-wider text-[#C8A96A]">
                   <CreditCard className="w-3.5 h-3.5 text-[#C8A96A]" />
-                  <span>2. Settlement Bank Account (For Escrow Payouts)</span>
+                  <span>2. Settlement Bank Account (For Direct Paystack Payouts)</span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -299,7 +299,7 @@ export const SellerVerificationModal: React.FC<SellerVerificationModalProps> = (
                   className="mt-0.5 rounded border-slate-700 bg-slate-900 text-[#C8A96A] focus:ring-[#C8A96A]"
                 />
                 <label htmlFor="agree-seller" className="text-[11px] text-[#8C9399] leading-relaxed cursor-pointer font-light">
-                  I agree to Abbason Hub terms: I understand that funds are held in escrow and released only after the buyer physically inspects the item and provides their secret 6-digit delivery OTP. Platform commission is 3% (capped at ₦2,000).
+                  I agree to Abbason Hub terms: I understand that the buyer pays transport upfront and settles the item price via Paystack upon physical inspection. Platform commission is 3% (capped at ₦2,000).
                 </label>
               </div>
 

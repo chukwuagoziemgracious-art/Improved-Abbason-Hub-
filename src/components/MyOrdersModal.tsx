@@ -58,7 +58,7 @@ ABBASON HUB — OFFICIAL CAMPUS RECEIPT
 ORDER NUMBER: ${order.orderNumber}
 TRANSACTION DATE: ${new Date(order.createdAt).toLocaleString('en-NG')}
 CAMPUS: ${order.campusName}
-PAYMENT STATUS: CONFIRMED & SECURED IN PAYLUK ESCROW
+PAYMENT STATUS: VERIFIED VIA PAYSTACK
 
 -------------------------------------------
 YOUR SECRET DELIVERY CONFIRMATION CODE:
@@ -87,7 +87,7 @@ Delivery Fee: ₦${order.deliveryFee.toLocaleString()}
 Payment Processing Fee: ₦${order.gatewayFee.toLocaleString()}
 TOTAL PAID: ₦${order.totalAmount.toLocaleString()}
 Payment Method: ${order.paymentMethod.toUpperCase()} (Online Web Payment)
-Platform Escrow: Secured by Payluk Escrow Vault
+Payment Security: Direct Paystack Inspect & Pay on Delivery
 
 Need help? Contact: support@abbasonhub.com
 ===========================================`;
@@ -144,14 +144,16 @@ Need help? Contact: support@abbasonhub.com
           ) : (
             <div className="space-y-4">
               {orders.map((order) => {
-                const isAwaitingDelivery = order.status === 'paid_awaiting_delivery';
-                const isDelivered = order.status === 'delivered';
+                const isPaidCompleted = order.status === 'paid_completed' || order.status === 'delivered';
+                const isPartiallyPaid = order.status === 'partially_paid';
+                const isPendingInspection = order.status === 'delivery_fee_paid' || order.status === 'in_transit' || order.status === 'delivered_pending_inspection';
+
                 return (
                   <div
                     key={order.id}
                     className={`p-4 rounded-2xl border transition-all ${
-                      isAwaitingDelivery
-                        ? 'bg-[#121a2c] border-[#f3c84b]/60 shadow-lg'
+                      isPendingInspection || isPartiallyPaid
+                        ? 'bg-[#0f172a] border-[#C8A96A]/60 shadow-lg'
                         : 'bg-slate-900/60 border-slate-800'
                     }`}
                   >
@@ -161,13 +163,17 @@ Need help? Contact: support@abbasonhub.com
                         <span className="font-bold font-mono text-white text-sm">
                           #{order.orderNumber}
                         </span>
-                        {isAwaitingDelivery ? (
-                          <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-600/50 text-amber-300 font-bold text-[10px]">
-                            Awaiting In-Person Delivery
-                          </span>
-                        ) : isDelivered ? (
+                        {isPaidCompleted ? (
                           <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/50 text-emerald-400 font-bold text-[10px]">
-                            Delivered & Handshake Verified
+                            Paid & Completed
+                          </span>
+                        ) : isPartiallyPaid ? (
+                          <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-600/50 text-amber-300 font-bold text-[10px]">
+                            Partially Paid
+                          </span>
+                        ) : isPendingInspection ? (
+                          <span className="px-2 py-0.5 rounded bg-[#C8A96A]/20 border border-[#C8A96A]/60 text-[#C8A96A] font-bold text-[10px]">
+                            Inspect On Delivery (POD)
                           </span>
                         ) : (
                           <span className="px-2 py-0.5 rounded bg-rose-950 border border-rose-500/50 text-rose-300 font-bold text-[10px]">
@@ -181,31 +187,25 @@ Need help? Contact: support@abbasonhub.com
                       </span>
                     </div>
 
-                    {/* Prominent Delivery Code Box if Awaiting Delivery */}
-                    {isAwaitingDelivery && (
+                    {/* Inspect-on-Delivery Call to Action */}
+                    {!isPaidCompleted && (
                       <div className="my-3 p-3.5 rounded-2xl bg-white/[0.03] border border-[#C8A96A]/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
                         <div>
                           <div className="flex items-center gap-1.5 text-[#C8A96A] font-medium text-xs uppercase tracking-wider">
-                            <KeyRound className="w-3.5 h-3.5" />
-                            <span>Your Handshake Delivery Code</span>
+                            <Truck className="w-3.5 h-3.5" />
+                            <span>Inspect & Pay At Hostel</span>
                           </div>
                           <p className="text-[11px] text-[#8C9399] mt-0.5 font-light">
-                            Show this code to <strong className="text-[#E9E6DF]">{order.sellerName}</strong> only after inspecting the item.
+                            Vendor is dispatched. Inspect items, then pay in 1 tap or per item.
                           </p>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="font-mono text-2xl font-black text-[#C8A96A] tracking-widest bg-[#0B1120] px-3.5 py-1.5 rounded-xl border border-[#C8A96A]/40 shadow">
-                            {store.getBuyerOtp(order.id) || order.deliveryOtpForBuyer || '••••••'}
-                          </span>
-                          <button
-                            onClick={() => handleCopyCode(order)}
-                            className="p-2 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-medium text-xs cursor-pointer"
-                            title="Copy code"
-                          >
-                            {copiedOrderId === order.id ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                          </button>
-                        </div>
+                        <button
+                          onClick={() => onViewOrderReceipt(order)}
+                          className="px-4 py-2 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-semibold text-xs cursor-pointer shadow-md shrink-0"
+                        >
+                          Inspect & Pay Now
+                        </button>
                       </div>
                     )}
 
@@ -230,7 +230,7 @@ Need help? Contact: support@abbasonhub.com
                       </div>
 
                       <div className="flex items-center gap-2">
-                        {isAwaitingDelivery && (
+                        {!isPaidCompleted && (
                           <button
                             onClick={() => onOpenDispute(order)}
                             className="px-2.5 py-1.5 rounded-lg bg-white/[0.04] text-rose-300 hover:bg-white/[0.08] border border-white/[0.08] text-[11px] flex items-center gap-1 cursor-pointer"
@@ -240,7 +240,7 @@ Need help? Contact: support@abbasonhub.com
                           </button>
                         )}
 
-                        {isDelivered && onRateSeller && (
+                        {isPaidCompleted && onRateSeller && (
                           <button
                             onClick={() => onRateSeller(order)}
                             className={`px-3 py-1.5 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-colors cursor-pointer ${

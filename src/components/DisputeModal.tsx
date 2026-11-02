@@ -22,7 +22,7 @@ export const DisputeModal: React.FC<DisputeModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     store.fileComplaint(order.id, reason, description);
-    alert('Dispute submitted! Escrow payout is now frozen pending admin review.');
+    alert('Report submitted! Our campus mediation team will review your order.');
     onDisputeFiled();
     onClose();
   };
@@ -57,11 +57,11 @@ export const DisputeModal: React.FC<DisputeModalProps> = ({
           </button>
         </div>
 
-        {/* Freezing Warning */}
+        {/* Notice */}
         <div className="p-3.5 bg-rose-950/40 border-b border-rose-900/40 text-rose-200 text-xs flex items-start gap-2">
           <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
           <p className="text-[11px] leading-relaxed">
-            Filing this report places an immediate freeze on the seller's escrow payout. Our campus mediation team will review your case.
+            Filing this report alerts our campus mediation team to review the delivery before final settlement.
           </p>
         </div>
 
@@ -123,7 +123,7 @@ export const DisputeModal: React.FC<DisputeModalProps> = ({
               type="submit"
               className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md transition-colors"
             >
-              Submit & Freeze Escrow
+              Submit Report
             </button>
           </div>
         </form>
