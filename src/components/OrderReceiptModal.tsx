@@ -53,15 +53,36 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
     setTimeout(() => setCopiedCodeId(null), 2000);
   };
 
+  const [rejectingItem, setRejectingItem] = useState<OrderItem | null>(null);
+  const [rejectReason, setRejectReason] = useState('Item faulty / not as described');
+  const [isRejecting, setIsRejecting] = useState(false);
+
+  // Refund handshake state
+  const [refundBank, setRefundBank] = useState('PalmPay');
+  const [refundAccount, setRefundAccount] = useState('');
+  const [refundAccountName, setRefundAccountName] = useState(order.buyerName || '');
+  const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
+  const [refundActionMessage, setRefundActionMessage] = useState<string | null>(null);
+
   const handlePayIndividualItem = async (item: OrderItem) => {
     setPayingItemId(item.id);
     setPaymentFeedback(null);
     try {
-      await new Promise((r) => setTimeout(r, 900));
+      const init = await store.initializePayment({
+        type: 'goods',
+        orderId: order.id,
+        itemIds: [item.id]
+      });
 
+      if (init.status && init.authorization_url) {
+        window.location.href = init.authorization_url;
+        return;
+      }
+
+      // Demo fallback
       const result = await store.payOrderItem(order.id, item.id);
       if (result.success) {
-        setPaymentFeedback(`Payment for ${item.title} confirmed · ${formatNaira(item.price * item.quantity)} received via Paystack.`);
+        setPaymentFeedback(`Payment for ${item.title} confirmed via Paystack.`);
       } else {
         setPaymentFeedback(result.error || 'Payment failed.');
       }
@@ -76,18 +97,83 @@ export const OrderReceiptModal: React.FC<OrderReceiptModalProps> = ({
     setIsPayingVendor(true);
     setPaymentFeedback(null);
     try {
-      await new Promise((r) => setTimeout(r, 1000));
+      const unpaidItemIds = unpaidItems.map((i) => i.id);
+      const init = await store.initializePayment({
+        type: 'goods',
+        orderId: order.id,
+        itemIds: unpaidItemIds
+      });
 
-      const result = await store.payVendorOrder(order.id);
-      if (result.success) {
-        setPaymentFeedback(`Payment for order #${order.orderNumber} confirmed · ${formatNaira(unpaidTotal)} received via Paystack.`);
-      } else {
-        setPaymentFeedback(result.error || 'Payment failed.');
+      if (init.status && init.authorization_url) {
+        window.location.href = init.authorization_url;
+        return;
       }
+
+      setPaymentFeedback('Payment initialization failed. Please try again.');
     } catch (err: any) {
       setPaymentFeedback('Payment processing error. Please try again.');
     } finally {
       setIsPayingVendor(false);
+    }
+  };
+
+  const handleConfirmReject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectingItem) return;
+    setIsRejecting(true);
+    try {
+      const res = await store.rejectOrderItem(order.id, rejectingItem.id, rejectReason);
+      if (res.success) {
+        setPaymentFeedback(`Item "${rejectingItem.title}" marked as rejected. No goods payment required.`);
+        setRejectingItem(null);
+      } else {
+        setPaymentFeedback(res.error || 'Failed to reject item');
+      }
+    } catch (err: any) {
+      setPaymentFeedback(err.message || 'Error rejecting item');
+    } finally {
+      setIsRejecting(false);
+    }
+  };
+
+  const handleRegisterRefundBank = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!refundAccount || refundAccount.replace(/\D/g, '').length !== 10) {
+      setRefundActionMessage('Please enter a valid 10-digit NUBAN account number.');
+      return;
+    }
+    setIsSubmittingRefund(true);
+    try {
+      const res = await store.submitRefundBankDetails(order.id, {
+        bankName: refundBank,
+        accountNumber: refundAccount.replace(/\D/g, ''),
+        accountName: refundAccountName
+      });
+      if (res.success) {
+        setRefundActionMessage('Refund bank account saved. The seller will dispatch the refund.');
+      } else {
+        setRefundActionMessage(res.error || 'Failed to save account');
+      }
+    } finally {
+      setIsSubmittingRefund(false);
+    }
+  };
+
+  const handleConfirmRefund = async () => {
+    const res = await store.confirmRefundReceived(order.id);
+    if (res.success) {
+      setRefundActionMessage('Refund confirmed as received.');
+    } else {
+      setRefundActionMessage(res.error || 'Failed to confirm');
+    }
+  };
+
+  const handleDisputeRefund = async () => {
+    const res = await store.disputeRefund(order.id, 'Buyer did not receive bank transfer from seller.');
+    if (res.success) {
+      setRefundActionMessage('Refund disputed and forwarded to administrator review.');
+    } else {
+      setRefundActionMessage(res.error || 'Failed to dispute');
     }
   };
 
@@ -181,7 +267,7 @@ Need help? Contact: support@abbasonhub.com
           {!isCompleted && unpaidTotal > 0 && (
             <div className="p-4 rounded-2xl bg-white/[0.03] border border-[#C8A96A]/30 flex items-center justify-between gap-3">
               <div>
-                <div className="text-[10px] text-slate-400 uppercase tracking-wider">Pay on Inspection</div>
+                <div className="text-[10px] text-slate-400 uppercase tracking-wider">Pay on Inspection (All Items)</div>
                 <div className="text-lg font-mono text-[#C8A96A] font-semibold">{formatNaira(unpaidTotal)}</div>
               </div>
 
@@ -189,20 +275,116 @@ Need help? Contact: support@abbasonhub.com
                 type="button"
                 onClick={handlePayVendorTotal}
                 disabled={isPayingVendor}
-                className="px-4 py-2 rounded-xl bg-[#C8A96A] hover:bg-[#d8bb7d] text-[#020406] font-semibold text-xs flex items-center gap-1.5 transition-all shadow-md cursor-pointer disabled:opacity-50"
+                className="px-4 py-2 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-semibold text-xs flex items-center gap-1.5 shadow transition-colors cursor-pointer disabled:opacity-60"
               >
-                {isPayingVendor ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Processing...</span>
-                  </>
-                ) : (
-                  <>
-                    <CreditCard className="w-3.5 h-3.5" />
-                    <span>Pay All via Paystack</span>
-                  </>
-                )}
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>{isPayingVendor ? 'Opening Paystack...' : `Pay ${formatNaira(unpaidTotal)} via Paystack`}</span>
               </button>
+            </div>
+          )}
+
+          {/* Refund Handshake Section (if refund exists) */}
+          {order.refund && (
+            <div className="p-4 rounded-2xl bg-amber-950/30 border border-amber-500/40 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold text-amber-200 flex items-center gap-2">
+                  <span>Delivery Fee Refund</span>
+                  <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-300 font-mono text-[10px] border border-amber-500/40">
+                    {(order.refund.multiplier || 1) > 1 ? `${order.refund.multiplier}x Penalty` : '1x Refund'}
+                  </span>
+                </div>
+                <div className="text-base font-bold text-amber-400 font-mono">
+                  {formatNaira(order.refund.owedAmount || order.refund.amountOwed || 0)}
+                </div>
+              </div>
+
+              {refundActionMessage && (
+                <div className="p-2 rounded-xl bg-amber-950/80 border border-amber-500/50 text-amber-200 text-xs">
+                  {refundActionMessage}
+                </div>
+              )}
+
+              {/* Status 1: Owed - prompt buyer for refund account */}
+              {order.refund.status === 'owed' && (
+                <div className="space-y-2">
+                  <p className="text-slate-300 text-xs font-light">
+                    {order.refundAccount
+                      ? `Refund destination saved: ${order.refundAccount.bankName} (******${order.refundAccount.accountNumber.slice(-4)}). Seller has 24h to dispatch bank transfer.`
+                      : 'Seller owes you a refund by direct bank transfer outside the app. Provide your Nigerian bank details below:'}
+                  </p>
+                  {!order.refundAccount && (
+                    <form onSubmit={handleRegisterRefundBank} className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={refundBank}
+                          onChange={(e) => setRefundBank(e.target.value)}
+                          placeholder="Bank / Wallet Name"
+                          className="bg-black/50 border border-white/[0.1] rounded-xl px-2.5 py-1.5 text-xs text-white"
+                          required
+                        />
+                        <input
+                          type="text"
+                          maxLength={10}
+                          value={refundAccount}
+                          onChange={(e) => setRefundAccount(e.target.value.replace(/\D/g, ''))}
+                          placeholder="10-digit NUBAN"
+                          className="bg-black/50 border border-white/[0.1] rounded-xl px-2.5 py-1.5 text-xs text-white font-mono"
+                          required
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={isSubmittingRefund}
+                        className="w-full py-2 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-semibold text-xs cursor-pointer shadow"
+                      >
+                        {isSubmittingRefund ? 'Saving...' : 'Save Refund Bank Account'}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              )}
+
+              {/* Status 2: Paid Claimed - prompt buyer to confirm or dispute */}
+              {order.refund.status === 'paid_claimed' && (
+                <div className="space-y-2">
+                  <p className="text-emerald-200 text-xs font-light">
+                    The seller has marked this refund as dispatched via bank transfer. Please check your bank account.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleConfirmRefund}
+                      className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs cursor-pointer shadow"
+                    >
+                      I Received It
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDisputeRefund}
+                      className="flex-1 py-2 rounded-xl bg-rose-900 hover:bg-rose-800 text-rose-100 font-semibold text-xs cursor-pointer"
+                    >
+                      I Did Not Receive It
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Status 3: Confirmed */}
+              {order.refund.status === 'confirmed' && (
+                <div className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-medium flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  <span>Refund confirmed received into your bank account.</span>
+                </div>
+              )}
+
+              {/* Status 4: Disputed */}
+              {order.refund.status === 'disputed' && (
+                <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-500/40 text-rose-300 text-xs font-medium flex items-center gap-2">
+                  <Flag className="w-4 h-4 text-rose-400" />
+                  <span>Refund disputed. Under investigation by administrator.</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -214,6 +396,7 @@ Need help? Contact: support@abbasonhub.com
 
             {order.items.map((item) => {
               const isItemPaid = item.status === 'paid';
+              const isItemRejected = item.status === 'rejected';
               const isProcessingThis = payingItemId === item.id;
               const itemTotal = item.price * item.quantity;
 
@@ -261,20 +444,29 @@ Need help? Contact: support@abbasonhub.com
                         <Check className="w-3 h-3" />
                         <span>Paid</span>
                       </span>
+                    ) : isItemRejected ? (
+                      <span className="inline-flex items-center px-2 py-1 rounded-lg bg-rose-950/80 border border-rose-500/40 text-rose-300 text-[10px]">
+                        Rejected
+                      </span>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => handlePayIndividualItem(item)}
-                        disabled={isProcessingThis || isPayingVendor}
-                        className="px-3 py-1.5 rounded-lg bg-[#C8A96A]/20 hover:bg-[#C8A96A]/30 border border-[#C8A96A]/40 text-[#C8A96A] text-[11px] font-medium flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50"
-                      >
-                        {isProcessingThis ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <CreditCard className="w-3 h-3" />
-                        )}
-                        <span>Pay</span>
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setRejectingItem(item)}
+                          className="px-2 py-1 rounded-lg bg-white/[0.04] hover:bg-rose-950/60 text-slate-400 hover:text-rose-300 border border-white/[0.08] text-[10px] transition-colors cursor-pointer"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePayIndividualItem(item)}
+                          disabled={isProcessingThis}
+                          className="px-2.5 py-1 rounded-lg bg-[#C8A96A] hover:bg-[#b89858] text-black font-semibold text-[10px] flex items-center gap-1 shadow transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          {isProcessingThis ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <CreditCard className="w-2.5 h-2.5" />}
+                          <span>Pay {formatNaira(itemTotal)}</span>
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -287,18 +479,15 @@ Need help? Contact: support@abbasonhub.com
             <div className="flex items-center gap-2 text-slate-300">
               <Truck className="w-4 h-4 text-[#C8A96A] shrink-0" />
               <div className="truncate">
-                <div className="text-[10px] text-slate-400">Drop-Off Location</div>
+                <div className="text-[10px] text-slate-400">Delivery Destination</div>
                 <div className="text-white truncate max-w-[200px]">{order.deliveryInstructions || order.buyerHostel}</div>
               </div>
             </div>
 
-            <a
-              href="tel:+2348034129081"
-              className="px-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-[#C8A96A] text-[11px] flex items-center gap-1 transition-colors"
-            >
-              <Phone className="w-3 h-3" />
-              <span>Call Seller</span>
-            </a>
+            <div className="text-right">
+              <span className="text-[10px] text-slate-400 block">Vendor</span>
+              <span className="text-emerald-400 text-[11px] font-medium">{order.sellerName}</span>
+            </div>
           </div>
 
           {/* Simple Totals */}
@@ -362,6 +551,60 @@ Need help? Contact: support@abbasonhub.com
             Done
           </button>
         </div>
+
+        {/* Item Rejection Dialog */}
+        {rejectingItem && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-3xl bg-[#0F172A] border border-rose-900/80 p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-white text-sm">Reject Faulty Item</h3>
+                <button
+                  onClick={() => setRejectingItem(null)}
+                  className="w-7 h-7 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-300">
+                Rejecting <strong>{rejectingItem.title}</strong> during physical handover inspection. No goods payment will be charged for this item.
+              </p>
+
+              <form onSubmit={handleConfirmReject} className="space-y-3">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block mb-1">
+                    Reason for Rejection *
+                  </label>
+                  <textarea
+                    rows={2}
+                    required
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                    placeholder="e.g. Broken screen, wrong size, defective..."
+                    className="w-full bg-[#0B1120] border border-slate-800 rounded-xl p-2.5 text-xs text-white"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRejectingItem(null)}
+                    className="flex-1 py-2 rounded-xl bg-slate-800 text-slate-300 font-medium text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isRejecting}
+                    className="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs disabled:opacity-50"
+                  >
+                    {isRejecting ? 'Rejecting...' : 'Confirm Rejection'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

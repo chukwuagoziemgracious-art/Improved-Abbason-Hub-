@@ -13,7 +13,7 @@ interface BankSwitcherModalProps {
     accountNumber: string;
     accountName: string;
     bankCode?: string;
-  }) => void;
+  }) => Promise<{ success?: boolean; error?: string; message?: string } | void> | void;
 }
 
 export const BankSwitcherModal: React.FC<BankSwitcherModalProps> = ({
@@ -32,7 +32,8 @@ export const BankSwitcherModal: React.FC<BankSwitcherModalProps> = ({
   );
   const [accountName, setAccountName] = useState(currentAccountName || '');
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const filteredBanks = useMemo(() => {
     return searchNigerianBanks(searchQuery);
@@ -44,9 +45,10 @@ export const BankSwitcherModal: React.FC<BankSwitcherModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccess(null);
 
     const effectiveBankName = selectedBank === 'other' ? customBankName.trim() : selectedBank;
 
@@ -68,18 +70,34 @@ export const BankSwitcherModal: React.FC<BankSwitcherModalProps> = ({
 
     const matchedBank = NIGERIAN_BANKS.find((b) => b.name === effectiveBankName);
 
-    onSave({
-      bankName: effectiveBankName,
-      accountNumber: cleanAcc,
-      accountName: accountName.trim(),
-      bankCode: matchedBank?.code
-    });
+    setIsSubmitting(true);
+    try {
+      const res = await onSave({
+        bankName: effectiveBankName,
+        accountNumber: cleanAcc,
+        accountName: accountName.trim(),
+        bankCode: matchedBank?.code
+      });
 
-    setSuccess(true);
-    setTimeout(() => {
-      setSuccess(false);
-      onClose();
-    }, 1200);
+      if (res && res.error) {
+        setError(res.error);
+        setIsSubmitting(false);
+        return;
+      }
+
+      setSuccess(
+        (res && res.message) ||
+          'Bank change request submitted for Administrator verification & Paystack setup.'
+      );
+      setTimeout(() => {
+        setSuccess(null);
+        onClose();
+      }, 2500);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to submit bank change request');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -96,10 +114,10 @@ export const BankSwitcherModal: React.FC<BankSwitcherModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-medium text-white font-serif">
-                Change Settlement Bank / Payout Account
+                Request Settlement Bank Change
               </h3>
               <p className="text-xs text-[#8C9399]">
-                Supports all Nigerian banks & fintechs (PalmPay, OPay, Moniepoint, etc.)
+                Bank changes require administrator approval & Paystack name verification
               </p>
             </div>
           </div>
@@ -124,7 +142,7 @@ export const BankSwitcherModal: React.FC<BankSwitcherModalProps> = ({
           {success && (
             <div className="p-3 rounded-xl bg-emerald-950/90 border border-emerald-500/60 text-emerald-200 flex items-center gap-2">
               <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span className="font-semibold">Payout bank updated successfully!</span>
+              <span className="font-semibold">{success}</span>
             </div>
           )}
 
@@ -291,7 +309,7 @@ export const BankSwitcherModal: React.FC<BankSwitcherModalProps> = ({
               <span>Transparent Settlement Notice</span>
             </div>
             <p className="font-light">
-              Abbason Hub does not hold your funds. Payouts are dispatched directly to your designated bank account once the buyer verifies their 6-digit delivery OTP in person.
+              Abbason Hub does not hold your funds. Payouts are dispatched directly via Paystack subaccount split to your verified bank account once the student inspects and pays for the item on delivery.
             </p>
           </div>
 
@@ -300,16 +318,24 @@ export const BankSwitcherModal: React.FC<BankSwitcherModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 font-medium cursor-pointer border border-white/[0.08]"
+              disabled={isSubmitting}
+              className="flex-1 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 font-medium cursor-pointer border border-white/[0.08] disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="flex-1 py-2.5 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-medium flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95"
+              disabled={isSubmitting}
+              className="flex-1 py-2.5 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-medium flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95 disabled:opacity-60"
             >
-              <span>Save Bank Account</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              {isSubmitting ? (
+                <span>Submitting Request...</span>
+              ) : (
+                <>
+                  <span>Submit Bank Change Request</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </>
+              )}
             </button>
           </div>
         </form>

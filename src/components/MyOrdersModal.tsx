@@ -33,41 +33,39 @@ export const MyOrdersModal: React.FC<MyOrdersModalProps> = ({
   onOpenDispute,
   onRateSeller,
 }) => {
-  const [copiedOrderId, setCopiedOrderId] = useState<string | null>(null);
-
   const currentUser = store.getCurrentUser();
   const orders = store.getOrders(currentUser.id, 'student');
 
   if (!isOpen) return null;
 
-  const handleCopyCode = (order: Order) => {
-    const buyerOtp = store.getBuyerOtp(order.id) || order.deliveryOtpForBuyer;
-    if (buyerOtp) {
-      navigator.clipboard.writeText(buyerOtp);
-      setCopiedOrderId(order.id);
-      setTimeout(() => setCopiedOrderId(null), 2000);
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+
+  const handleCancelOrder = async (orderId: string) => {
+    if (!window.confirm('Are you sure you want to cancel this order? The upfront delivery fee is non-refundable upon buyer cancellation.')) return;
+    setCancellingOrderId(orderId);
+    setActionFeedback(null);
+    try {
+      const res = await store.cancelOrder(orderId);
+      if (res.success) {
+        setActionFeedback('Order cancelled successfully.');
+      } else {
+        setActionFeedback(res.error || 'Failed to cancel order.');
+      }
+    } finally {
+      setCancellingOrderId(null);
     }
   };
 
   const handleDownloadReceipt = (order: Order) => {
-    const buyerOtp = store.getBuyerOtp(order.id) || order.deliveryOtpForBuyer;
     const receiptContent = `===========================================
 ABBASON HUB — OFFICIAL CAMPUS RECEIPT
-"Everything you imagined."
+"Inspect First · Pay On Delivery"
 ===========================================
 ORDER NUMBER: ${order.orderNumber}
 TRANSACTION DATE: ${new Date(order.createdAt).toLocaleString('en-NG')}
 CAMPUS: ${order.campusName}
-PAYMENT STATUS: VERIFIED VIA PAYSTACK
-
--------------------------------------------
-YOUR SECRET DELIVERY CONFIRMATION CODE:
->>>  ${buyerOtp || '••••••'}  <<<
--------------------------------------------
-SECURITY INSTRUCTION:
-Do NOT share this code with the seller beforehand!
-Only provide this code in person after you physically 
-receive, inspect, and confirm your order is in good condition.
+PAYMENT STATUS: ${order.paymentStatus.toUpperCase()}
 
 BUYER DETAILS:
 Name: ${order.buyerName}
@@ -76,18 +74,15 @@ Delivery Destination: ${order.deliveryInstructions}
 
 SELLER DETAILS:
 Vendor / Store: ${order.sellerName}
-Contact Phone: +234 803 412 9081
 
 PURCHASED ITEMS:
-${order.items.map((i) => `• ${i.title} (x${i.quantity}) — ₦${(i.price * i.quantity).toLocaleString()}`).join('\n')}
+${order.items.map((i) => `• ${i.title} (x${i.quantity}) — ₦${(i.price * i.quantity).toLocaleString()} [Item Code: ${i.itemCode}]`).join('\n')}
 
 FINANCIAL BREAKDOWN:
-Subtotal: ₦${order.subtotal.toLocaleString()}
-Delivery Fee: ₦${order.deliveryFee.toLocaleString()}
-Payment Processing Fee: ₦${order.gatewayFee.toLocaleString()}
-TOTAL PAID: ₦${order.totalAmount.toLocaleString()}
-Payment Method: ${order.paymentMethod.toUpperCase()} (Online Web Payment)
-Payment Security: Direct Paystack Inspect & Pay on Delivery
+Upfront Transport Fee: ₦${(order.upfrontTotalPaid || order.deliveryFee).toLocaleString()}
+Items Total Due Upon Delivery: ₦${order.subtotal.toLocaleString()}
+Items Paid So Far: ₦${(order.itemsTotalPaid || 0).toLocaleString()}
+Order Total: ₦${order.totalAmount.toLocaleString()}
 
 Need help? Contact: support@abbasonhub.com
 ===========================================`;
@@ -117,7 +112,7 @@ Need help? Contact: support@abbasonhub.com
             </div>
             <div>
               <h3 className="text-base font-medium text-white font-serif">
-                My Purchases & Delivery Codes
+                My Purchases & Parcels
               </h3>
               <p className="text-[11px] text-[#8C9399]">
                 Logged in as: {currentUser.name}
@@ -133,6 +128,16 @@ Need help? Contact: support@abbasonhub.com
           </button>
         </div>
 
+        {/* Action Feedback Banner */}
+        {actionFeedback && (
+          <div className="bg-[#C8A96A]/20 border-b border-[#C8A96A]/40 px-4 py-2 text-xs text-amber-200 flex items-center justify-between">
+            <span>{actionFeedback}</span>
+            <button onClick={() => setActionFeedback(null)} className="text-[#C8A96A] text-[10px] cursor-pointer">
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Content */}
         <div className="overflow-y-auto p-4 sm:p-6 space-y-4">
           {orders.length === 0 ? (
@@ -147,25 +152,45 @@ Need help? Contact: support@abbasonhub.com
                 const isPaidCompleted = order.status === 'paid_completed' || order.status === 'delivered';
                 const isPartiallyPaid = order.status === 'partially_paid';
                 const isPendingInspection = order.status === 'delivery_fee_paid' || order.status === 'in_transit' || order.status === 'delivered_pending_inspection';
+                const isCancelled = order.status === 'cancelled';
+                const isOverdue = store.isOrderOverdue(order);
+
+                const cutoff = order.contactRevealAtMs || (order.deliveryDeadlineMs ? order.deliveryDeadlineMs - (48 * 3600 * 1000) : 0);
+                const canCancel = !isPaidCompleted && !isCancelled && cutoff > 0 && Date.now() < cutoff;
+                const isPastCutoff = !isPaidCompleted && !isCancelled && cutoff > 0 && Date.now() >= cutoff;
 
                 return (
                   <div
                     key={order.id}
                     className={`p-4 rounded-2xl border transition-all ${
-                      isPendingInspection || isPartiallyPaid
-                        ? 'bg-[#0f172a] border-[#C8A96A]/60 shadow-lg'
-                        : 'bg-slate-900/60 border-slate-800'
+                      isOverdue
+                        ? 'bg-rose-950/20 border-rose-500/50 shadow-lg'
+                        : isPendingInspection || isPartiallyPaid
+                          ? 'bg-[#0f172a] border-[#C8A96A]/60 shadow-lg'
+                          : 'bg-slate-900/60 border-slate-800'
                     }`}
                   >
                     {/* Header line */}
                     <div className="flex items-center justify-between text-xs mb-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-bold font-mono text-white text-sm">
                           #{order.orderNumber}
                         </span>
+
+                        {isOverdue && (
+                          <span className="px-2 py-0.5 rounded bg-rose-950 border border-rose-500/60 text-rose-300 font-bold text-[10px] flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 text-rose-400" />
+                            <span>Overdue</span>
+                          </span>
+                        )}
+
                         {isPaidCompleted ? (
                           <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/50 text-emerald-400 font-bold text-[10px]">
                             Paid & Completed
+                          </span>
+                        ) : isCancelled ? (
+                          <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-400 font-medium text-[10px]">
+                            Cancelled ({order.cancelReason === 'buyer_cancelled' ? 'by you' : 'by seller'})
                           </span>
                         ) : isPartiallyPaid ? (
                           <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-600/50 text-amber-300 font-bold text-[10px]">
@@ -178,6 +203,12 @@ Need help? Contact: support@abbasonhub.com
                         ) : (
                           <span className="px-2 py-0.5 rounded bg-rose-950 border border-rose-500/50 text-rose-300 font-bold text-[10px]">
                             Disputed
+                          </span>
+                        )}
+
+                        {order.refund && (
+                          <span className="px-2 py-0.5 rounded bg-amber-950/70 border border-amber-500/40 text-amber-300 text-[10px] font-mono">
+                            Refund {order.refund.status}: {formatNaira(order.refund.owedAmount || order.refund.amountOwed || 0)}
                           </span>
                         )}
                       </div>
@@ -225,12 +256,42 @@ Need help? Contact: support@abbasonhub.com
 
                     {/* Footer Row */}
                     <div className="pt-2 border-t border-white/[0.08] flex flex-wrap items-center justify-between gap-2 text-xs">
-                      <div className="font-medium text-white">
-                        Total: <span className="text-[#C8A96A] font-serif tabular-nums">{formatNaira(order.totalAmount)}</span>
+                      <div className="font-medium text-white flex items-center gap-2">
+                        <span>Total: <span className="text-[#C8A96A] font-serif tabular-nums">{formatNaira(order.totalAmount)}</span></span>
+                        {canCancel && (
+                          <span className="text-[10px] text-slate-400">
+                            (Can cancel until {new Date(cutoff).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })})
+                          </span>
+                        )}
+                        {isPastCutoff && !isCancelled && !isPaidCompleted && (
+                          <span className="text-[10px] text-slate-500 italic">
+                            Cancellation closed
+                          </span>
+                        )}
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        {!isPaidCompleted && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {canCancel && (
+                          <button
+                            onClick={() => handleCancelOrder(order.id)}
+                            disabled={cancellingOrderId === order.id}
+                            className="px-2.5 py-1.5 rounded-lg bg-white/[0.04] text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 border border-white/[0.08] text-[11px] cursor-pointer transition-colors disabled:opacity-50"
+                          >
+                            {cancellingOrderId === order.id ? 'Cancelling...' : 'Cancel Order'}
+                          </button>
+                        )}
+
+                        {isOverdue && !isPaidCompleted && !isCancelled && (
+                          <button
+                            onClick={() => onOpenDispute(order)}
+                            className="px-2.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-rose-200 text-[11px] font-medium flex items-center gap-1 cursor-pointer"
+                          >
+                            <AlertTriangle className="w-3 h-3 text-rose-400" />
+                            <span>Report Late Delivery</span>
+                          </button>
+                        )}
+
+                        {!isPaidCompleted && !isCancelled && !isOverdue && (
                           <button
                             onClick={() => onOpenDispute(order)}
                             className="px-2.5 py-1.5 rounded-lg bg-white/[0.04] text-rose-300 hover:bg-white/[0.08] border border-white/[0.08] text-[11px] flex items-center gap-1 cursor-pointer"

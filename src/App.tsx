@@ -63,6 +63,7 @@ export default function App() {
   const [authOpen, setAuthOpen] = useState(false);
   const [disputeModalOrder, setDisputeModalOrder] = useState<Order | null>(null);
   const [myOrdersOpen, setMyOrdersOpen] = useState(false);
+  const [paymentsMode, setPaymentsMode] = useState<'demo' | 'test' | 'live' | null>(null);
 
   // Mobile Bottom Nav active view
   const [activeMobileScreen, setActiveMobileScreen] = useState<'explore' | 'search' | 'orders' | 'account' | 'admin'>('explore');
@@ -72,8 +73,32 @@ export default function App() {
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 2500);
+    setTimeout(() => setToastMessage(null), 3000);
   };
+
+  useEffect(() => {
+    fetch('/api/config')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.paymentsMode) setPaymentsMode(data.paymentsMode);
+      })
+      .catch(() => {});
+
+    // Check payment callback URL params
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('payment_status') === 'success') {
+      const orderId = params.get('orderId');
+      showToast('Payment confirmed received via Paystack');
+      if (orderId) {
+        const order = store.getOrders().find((o) => o.id === orderId);
+        if (order) setActiveReceiptOrder(order);
+      }
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (params.get('payment_error')) {
+      showToast('Payment was not completed: ' + params.get('payment_error'));
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
 
   const currentUser = store.getCurrentUser();
   const activeCampus = store.getActiveCampus();
@@ -152,6 +177,20 @@ export default function App() {
       {toastMessage && (
         <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 px-5 py-2 rounded-full bg-[#020406]/95 backdrop-blur-xl border border-[#C8A96A] text-[#C8A96A] text-xs font-medium tracking-[0.2em] uppercase shadow-[0_20px_50px_rgba(0,0,0,0.85)] animate-bounce">
           {toastMessage}
+        </div>
+      )}
+
+      {/* Payments Mode Banner */}
+      {paymentsMode === 'demo' && (
+        <div className="w-full bg-[#C8A96A]/10 border-b border-[#C8A96A]/30 py-1.5 px-4 text-center text-[10px] font-medium text-[#C8A96A] tracking-wider uppercase flex items-center justify-center gap-2 relative z-30">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#C8A96A] animate-pulse" />
+          <span>Demo mode: no real money</span>
+        </div>
+      )}
+      {paymentsMode === 'test' && (
+        <div className="w-full bg-blue-500/10 border-b border-blue-500/30 py-1.5 px-4 text-center text-[10px] font-medium text-blue-400 tracking-wider uppercase flex items-center justify-center gap-2 relative z-30">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+          <span>Test mode</span>
         </div>
       )}
 

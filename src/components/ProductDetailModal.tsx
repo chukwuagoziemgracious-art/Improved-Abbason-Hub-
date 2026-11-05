@@ -8,7 +8,8 @@ import {
   Phone, 
   Star,
   CheckCircle2,
-  MessageSquare
+  MessageSquare,
+  Clock
 } from 'lucide-react';
 import { Product } from '../types';
 import { formatNaira } from '../utils/currency';
@@ -145,8 +146,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               </div>
 
               <div className="text-right text-xs">
-                <span className="text-[#8C9399] block text-[9px] uppercase tracking-[0.2em] font-medium">Campus Contact</span>
-                <span className="text-[#E9E6DF] font-mono font-normal tracking-wider">{product.sellerPhone}</span>
+                <span className="text-[#8C9399] block text-[9px] uppercase tracking-[0.2em] font-medium">Campus Location</span>
+                <span className="text-[#E9E6DF] font-sans font-medium text-xs">{product.campusName}</span>
               </div>
             </div>
           </div>
@@ -213,6 +214,21 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                       )}
                     </div>
                   </div>
+                </div>
+
+                {/* Delivery Schedule badge */}
+                <div className="pt-2 border-t border-white/[0.06] flex items-center gap-2 text-slate-300">
+                  <Clock className="w-3.5 h-3.5 text-[#C8A96A] shrink-0" />
+                  <span className="text-[11px]">
+                    {product.deliverySchedule?.type === 'within_3_days' && 'Dispatch within 3 days'}
+                    {(!product.deliverySchedule || product.deliverySchedule.type === 'within_7_days') && 'Dispatch within 7 days'}
+                    {product.deliverySchedule?.type === 'specific_days' && product.deliverySchedule.specificDays && (
+                      <span>Dispatches {product.deliverySchedule.specificDays.map((d: string) => d.slice(0, 3).toUpperCase()).join(', ')}</span>
+                    )}
+                    {product.deliverySchedule?.timeSlot && product.deliverySchedule.timeSlot !== 'any' && (
+                      <span className="text-slate-400"> ({product.deliverySchedule.timeSlot} slot)</span>
+                    )}
+                  </span>
                 </div>
               </div>
 

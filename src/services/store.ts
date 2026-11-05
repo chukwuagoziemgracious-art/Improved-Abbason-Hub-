@@ -3,6 +3,7 @@ import {
   Category,
   Product,
   User,
+  SellerProfile,
   Order,
   CartItem,
   Complaint,
@@ -11,27 +12,35 @@ import {
   PlatformMetrics,
   Role,
   DeliveryOption,
+  DeliverySchedule,
   SellerReview,
   OrderItem,
   OrderStatus
 } from '../types';
 import { CAMPUSES, CATEGORIES, INITIAL_USERS, INITIAL_PRODUCTS, INITIAL_ORDERS, INITIAL_SELLER_REVIEWS } from '../data/seedData';
 import { calculatePlatformCommission, calculateGatewayFee } from '../utils/currency';
-import { generateDeliveryOtp, generateSalt, hashOtp } from '../utils/crypto';
 import {
   testConnection,
   subscribeToProducts,
-  subscribeToOrders,
+  subscribeToSellerProfiles,
+  subscribeToUserOrders,
   saveProductToFirestore,
   updateProductInFirestore,
+  deleteProductFromFirestore,
   saveOrderToFirestore,
   updateOrderInFirestore,
+  getUserFromFirestore,
+  saveUserToFirestore,
+  updateUserInFirestore,
   saveReviewToFirestore,
   saveComplaintToFirestore,
   updateComplaintInFirestore,
   saveVerificationToFirestore,
   updateVerificationInFirestore,
-  updateUserInFirestore
+  cleanupSellerPhonesFromProducts,
+  onAuthChange,
+  logoutUser,
+  auth
 } from './firebase';
 
 const STORAGE_KEYS = {
@@ -54,7 +63,7 @@ class Store {
   private campuses: Campus[] = [];
   private activeCampusId: string = 'all';
   private users: User[] = [];
-  private currentUser: User = INITIAL_USERS[0]; // Chiamaka (Student Buyer) by default
+  private currentUser: User = INITIAL_USERS[0];
   private products: Product[] = [];
   private orders: Order[] = [];
   private cart: CartItem[] = [];
@@ -63,7 +72,8 @@ class Store {
   private verifications: SellerVerificationRequest[] = [];
   private reviews: SellerReview[] = [];
   private adminAuthenticated: boolean = false;
-  private buyerOtpVault: Map<string, string> = new Map();
+  private sellerProfiles: Map<string, SellerProfile> = new Map();
+  private orderUnsubscribe?: () => void;
   private listeners: Set<() => void> = new Set();
 
   constructor() {
@@ -82,26 +92,82 @@ class Store {
           this.products = Array.from(productMap.values());
           this.save(true);
         } else if (this.products.length > 0) {
-          // Pre-seed cloud collection so all nationwide users share identical inventory
           this.products.forEach((p) => {
             saveProductToFirestore(p).catch(() => {});
           });
         }
       });
 
-      // Real-time Firestore synchronization for orders
-      subscribeToOrders((remoteOrders) => {
-        if (remoteOrders && remoteOrders.length > 0) {
-          const orderMap = new Map<string, Order>();
-          this.orders.forEach((o) => orderMap.set(o.id, o));
-          remoteOrders.forEach((o) => orderMap.set(o.id, o));
-          this.orders = Array.from(orderMap.values());
+      // Real-time public seller profiles
+      subscribeToSellerProfiles((profiles) => {
+        this.sellerProfiles.clear();
+        profiles.forEach((p) => this.sellerProfiles.set(p.id, p));
+        this.notify();
+      });
+
+      // Listen for authenticated user session from Firebase Auth
+      onAuthChange(async (fbUser) => {
+        if (fbUser && fbUser.email) {
+          const isOwner = fbUser.email.toLowerCase() === 'chukwuagoziemgracious@gmail.com';
+          if (isOwner) {
+            this.adminAuthenticated = true;
+            sessionStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, 'true');
+            cleanupSellerPhonesFromProducts().catch(() => {});
+          }
+
+          const cloudUser = await getUserFromFirestore(fbUser.uid);
+          if (cloudUser) {
+            this.currentUser = cloudUser;
+          } else {
+            const campus = this.campuses.find((c) => c.id !== 'all') || this.campuses[0];
+            const newProfile: User = {
+              id: fbUser.uid,
+              name: fbUser.displayName || fbUser.email.split('@')[0] || 'Campus Student',
+              email: fbUser.email,
+              phone: fbUser.phoneNumber || '+234 800 000 0000',
+              role: isOwner ? 'admin' : 'student',
+              campusId: campus.id,
+              campusName: campus.name,
+              hostel: 'Campus Area',
+              isVerifiedSeller: false,
+              sellerVerificationStatus: 'not_applied'
+            };
+            this.currentUser = newProfile;
+            saveUserToFirestore(newProfile).catch(() => {});
+          }
           this.save(true);
+          this.resubscribeOrders();
+        } else {
+          // Signed out
+          this.resubscribeOrders();
         }
       });
     }).catch((err) => {
       console.warn('[Abbason Hub] Cloud sync active in offline-first mode:', err);
     });
+  }
+
+  public resubscribeOrders() {
+    if (this.orderUnsubscribe) {
+      this.orderUnsubscribe();
+      this.orderUnsubscribe = undefined;
+    }
+    if (!this.currentUser || !this.currentUser.id || this.currentUser.id.startsWith('user_demo_guest')) {
+      this.orders = [];
+      this.save(true);
+      return;
+    }
+    const isOwner = this.isAdminAuthenticated();
+    this.orderUnsubscribe = subscribeToUserOrders(
+      this.currentUser.id,
+      isOwner,
+      (remoteOrders) => {
+        const orderMap = new Map<string, Order>();
+        remoteOrders.forEach((o) => orderMap.set(o.id, o));
+        this.orders = Array.from(orderMap.values());
+        this.save(true);
+      }
+    );
   }
 
   private init() {
@@ -171,11 +237,8 @@ class Store {
       const savedAdminAuth = sessionStorage.getItem(STORAGE_KEYS.ADMIN_AUTH);
       this.adminAuthenticated = savedAdminAuth === 'true';
 
-      // Load secure buyer OTP vault
-      const savedVault = localStorage.getItem('abbason_buyer_vault_v1');
-      if (savedVault) {
-        this.buyerOtpVault = new Map(JSON.parse(savedVault));
-      }
+      localStorage.removeItem('abbason_buyer_vault_v1');
+      localStorage.removeItem('abbason_student_passwords_v1');
     } catch {
       // Fallback
       this.campuses = CAMPUSES;
@@ -223,16 +286,70 @@ class Store {
     this.listeners.forEach((l) => l());
   }
 
-  // --- Buyer Secret Vault (Plaintext OTPs kept strictly local to buyer) ---
-  public getBuyerOtp(orderId: string): string | undefined {
-    return this.buyerOtpVault.get(orderId);
+  public isSignedIn(): boolean {
+    return !!(this.currentUser && this.currentUser.id && !this.currentUser.id.startsWith('user_demo_guest'));
   }
 
-  public saveBuyerOtp(orderId: string, otp: string): void {
-    this.buyerOtpVault.set(orderId, otp);
+  public async logout(): Promise<void> {
+    await logoutUser();
+    this.adminAuthenticated = false;
     try {
-      localStorage.setItem('abbason_buyer_vault_v1', JSON.stringify(Array.from(this.buyerOtpVault.entries())));
+      sessionStorage.removeItem(STORAGE_KEYS.ADMIN_AUTH);
     } catch {}
+    this.currentUser = INITIAL_USERS[0];
+    this.resubscribeOrders();
+    this.save();
+  }
+
+  public async handleGoogleLoginSuccess(
+    fbUser: { uid: string; email: string | null; displayName: string | null; phoneNumber: string | null },
+    campusId?: string,
+    hostel?: string
+  ): Promise<User> {
+    const isOwner = (fbUser.email || '').toLowerCase() === 'chukwuagoziemgracious@gmail.com';
+    if (isOwner) {
+      this.adminAuthenticated = true;
+      try {
+        sessionStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, 'true');
+      } catch {}
+    }
+    const existing = await getUserFromFirestore(fbUser.uid);
+    let resolvedUser: User;
+    if (existing) {
+      resolvedUser = {
+        ...existing,
+        role: isOwner ? 'admin' : existing.role,
+        campusId: campusId || existing.campusId,
+        hostel: hostel || existing.hostel
+      };
+      if (campusId) {
+        const c = this.campuses.find((camp) => camp.id === campusId);
+        if (c) resolvedUser.campusName = c.name;
+      }
+      await saveUserToFirestore(resolvedUser);
+    } else {
+      const selectedCampus = this.campuses.find((c) => c.id === campusId) || this.campuses.find((c) => c.id !== 'all') || this.campuses[0];
+      resolvedUser = {
+        id: fbUser.uid,
+        name: fbUser.displayName || (fbUser.email ? fbUser.email.split('@')[0] : 'Campus Student'),
+        email: fbUser.email || '',
+        phone: fbUser.phoneNumber || '',
+        role: isOwner ? 'admin' : 'student',
+        campusId: selectedCampus.id,
+        campusName: selectedCampus.name,
+        hostel: hostel || 'Campus Area',
+        isVerifiedSeller: false,
+        sellerVerificationStatus: 'not_applied'
+      };
+      await saveUserToFirestore(resolvedUser);
+    }
+    this.setCurrentUser(resolvedUser);
+    this.resubscribeOrders();
+    return resolvedUser;
+  }
+
+  public getSellerProfile(sellerId: string): SellerProfile | undefined {
+    return this.sellerProfiles.get(sellerId);
   }
 
   // --- Admin Access Gating (Zero-Trust Verified by Google OAuth) ---
@@ -313,7 +430,7 @@ class Store {
     return !!user.isVerifiedSeller && user.sellerVerificationStatus === 'verified';
   }
 
-  public getSellerVerificationStatus(userId?: string): 'not_applied' | 'pending' | 'verified' | 'rejected' {
+  public getSellerVerificationStatus(userId?: string): 'not_applied' | 'pending' | 'approved_pending_fee' | 'verified' | 'rejected' {
     const targetId = userId || this.currentUser.id;
     const user = this.users.find((u) => u.id === targetId) || this.currentUser;
     if (user.sellerVerificationStatus) return user.sellerVerificationStatus;
@@ -342,45 +459,6 @@ class Store {
     this.save();
   }
 
-  public authenticateWithPassword(
-    email: string,
-    pass: string
-  ): { success: boolean; error?: string; user?: User } {
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) {
-      return { success: false, error: 'Please enter your email.' };
-    }
-    if (cleanEmail === 'chukwuagoziemgracious@gmail.com') {
-      return { success: false, error: 'Platform Owner account must sign in via Google Authentication.' };
-    }
-    if (!pass || pass.length < 6) {
-      return { success: false, error: 'Password must be at least 6 characters.' };
-    }
-
-    const passwordsMap: Record<string, string> = JSON.parse(
-      localStorage.getItem('abbason_student_passwords_v1') || '{}'
-    );
-
-    const user = this.users.find((u) => u.email.toLowerCase() === cleanEmail);
-    if (!user) {
-      return { success: false, error: 'Student account not found. Please register first.' };
-    }
-
-    const savedPass = passwordsMap[cleanEmail];
-    if (savedPass && savedPass !== pass) {
-      return { success: false, error: 'Incorrect password for this student account.' };
-    }
-
-    // If initial login for pre-seeded student without password set, record the password now
-    if (!savedPass) {
-      passwordsMap[cleanEmail] = pass;
-      localStorage.setItem('abbason_student_passwords_v1', JSON.stringify(passwordsMap));
-    }
-
-    this.setCurrentUser(user);
-    return { success: true, user };
-  }
-
   public registerUser(data: {
     name: string;
     email: string;
@@ -389,7 +467,6 @@ class Store {
     campusId: string;
     hostel: string;
     storeName?: string;
-    password?: string;
   }): User {
     const cleanEmail = data.email.trim().toLowerCase();
     const campus = this.campuses.find((c) => c.id === data.campusId) || this.campuses[0];
@@ -410,14 +487,6 @@ class Store {
       rating: 5.0,
       reviewsCount: 0
     };
-
-    if (data.password) {
-      const passwordsMap: Record<string, string> = JSON.parse(
-        localStorage.getItem('abbason_student_passwords_v1') || '{}'
-      );
-      passwordsMap[cleanEmail] = data.password;
-      localStorage.setItem('abbason_student_passwords_v1', JSON.stringify(passwordsMap));
-    }
 
     this.users.push(newUser);
     this.currentUser = newUser;
@@ -508,6 +577,7 @@ class Store {
     deliveryFee: number;
     pickupLandmark: string;
     brand?: string;
+    deliverySchedule?: DeliverySchedule;
   }): Product {
     // Check if seller is verified
     if (!this.canUserSell(this.currentUser.id)) {
@@ -519,7 +589,6 @@ class Store {
       id: `prod_${Date.now()}`,
       sellerId: this.currentUser.id,
       sellerName: this.currentUser.storeName || this.currentUser.name,
-      sellerPhone: this.currentUser.phone,
       sellerVerified: true,
       sellerRating: this.currentUser.rating || 5.0,
       sellerReviewCount: this.currentUser.reviewsCount || 0,
@@ -537,6 +606,7 @@ class Store {
       deliveryOption: data.deliveryOption,
       deliveryFee: data.deliveryFee,
       pickupLandmark: data.pickupLandmark,
+      deliverySchedule: data.deliverySchedule || { type: 'within_7_days', timeSlot: 'any' },
       brand: data.brand || 'Student Brand',
       status: 'pending_review', // Strict rule: starts UNPUBLISHED until approved by Admin!
       createdAt: new Date().toISOString()
@@ -615,27 +685,105 @@ class Store {
     this.save();
   }
 
-  // --- Order Creation & Multi-Vendor Escrow Logic ---
+  private async getAuthHeader(): Promise<Record<string, string>> {
+    try {
+      if (auth.currentUser) {
+        const token = await auth.currentUser.getIdToken();
+        if (token) return { Authorization: `Bearer ${token}` };
+      }
+    } catch {}
+    return { Authorization: `Bearer ${this.currentUser.id || 'demo_user_1'}` };
+  }
+
+  public async initializePayment(payload: {
+    type: 'delivery_fee' | 'goods' | 'vendor_fee';
+    orderId?: string;
+    itemIds?: string[];
+    sellerId?: string;
+  }): Promise<{ status: boolean; paymentsMode?: string; reference?: string; authorization_url?: string; error?: string }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch('/api/payments/initialize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers
+        },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { status: false, error: data.error || 'Payment initialization failed' };
+      }
+      return data;
+    } catch (err: any) {
+      return { status: false, error: err.message || 'Network error initializing payment' };
+    }
+  }
+
+  // --- Order Creation & Multi-Vendor Checkout Logic ---
   public async checkoutOrders(data: {
     fulfillmentType: 'seller_delivers' | 'buyer_pickup';
     deliveryInstructions: string;
     paymentMethod: 'card' | 'bank_transfer' | 'ussd';
+    sellerConfigs?: Record<string, {
+      fulfillmentType?: 'seller_delivers' | 'buyer_pickup';
+      meetingPoint?: { kind: 'safe_checkpoint' | 'custom'; label: string };
+      scheduledDate?: string;
+      timeSlot?: 'morning' | 'afternoon' | 'evening' | 'any';
+      deliveryInstructions?: string;
+    }>;
   }): Promise<Order[]> {
     if (this.cart.length === 0) {
       throw new Error('Basket is empty');
     }
 
-    // Pre-checkout stock verification
-    for (const item of this.cart) {
-      const liveProduct = this.products.find((p) => p.id === item.product.id) || item.product;
-      if (liveProduct.stock < item.quantity) {
-        throw new Error(
-          `Insufficient stock for "${liveProduct.title}". Only ${liveProduct.stock} unit(s) available.`
-        );
+    // Try server-authoritative checkout first
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers
+        },
+        body: JSON.stringify({
+          items: this.cart,
+          sellerConfigs: data.sellerConfigs || {},
+          buyerInfo: {
+            name: this.currentUser.name,
+            phone: this.currentUser.phone,
+            hostel: this.currentUser.hostel,
+            campusId: this.currentUser.campusId || this.getActiveCampus().id,
+            campusName: this.currentUser.campusName || this.getActiveCampus().name
+          }
+        })
+      });
+
+      if (res.ok) {
+        const result = await res.json();
+        if (result.orders && Array.isArray(result.orders)) {
+          for (const order of result.orders) {
+            this.orders.unshift(order);
+          }
+          this.clearCart();
+          this.save();
+          return result.orders;
+        }
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson.error) {
+          throw new Error(errJson.error);
+        }
+      }
+    } catch (apiErr: any) {
+      console.warn('API checkout notice, verifying fallback:', apiErr.message);
+      if (apiErr.message && !apiErr.message.includes('fetch')) {
+        throw apiErr;
       }
     }
 
-    // Group cart items strictly by sellerId for vendor-isolated parcels
+    // Fallback local creation if offline
     const vendorMap = new Map<string, CartItem[]>();
     for (const item of this.cart) {
       const sId = item.product.sellerId;
@@ -650,21 +798,15 @@ class Store {
     for (const [sellerId, items] of vendorMap.entries()) {
       const firstProduct = items[0].product;
       const campus = this.campuses.find((c) => c.id === firstProduct.campusId) || this.getActiveCampus();
-
       const subtotal = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
       const deliveryFee = data.fulfillmentType === 'seller_delivers'
         ? Math.max(...items.map((item) => item.product.deliveryFee))
         : 0;
 
-      // Platform commission: 3% capped at ₦2,000 max
       const platformCommission = calculatePlatformCommission(subtotal);
-
-      // Upfront Delivery Commitment Fee + small gateway fee
       const upfrontDeliveryFee = deliveryFee;
       const upfrontGatewayFee = calculateGatewayFee(upfrontDeliveryFee);
       const upfrontTotalPaid = upfrontDeliveryFee + upfrontGatewayFee;
-
-      // Item total due strictly upon physical hostel delivery & inspection
       const itemsTotalDueOnDelivery = subtotal;
       const totalAmount = upfrontTotalPaid + itemsTotalDueOnDelivery;
       const sellerPayoutAmount = subtotal - platformCommission;
@@ -672,7 +814,6 @@ class Store {
       const orderId = `order_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const orderNumber = `AB-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
-      // Assign unique item-level tracking codes for inspection & itemized payment
       const orderItems: OrderItem[] = items.map((item, idx) => ({
         id: `item_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
         itemCode: `ITM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
@@ -711,30 +852,14 @@ class Store {
         fulfillmentType: data.fulfillmentType,
         deliveryInstructions: data.deliveryInstructions,
         paymentMethod: data.paymentMethod,
-        paymentStatus: 'delivery_fee_paid',
-        status: 'delivery_fee_paid',
+        paymentStatus: deliveryFee === 0 ? 'delivery_fee_paid' : 'pending_inspection_pay',
+        status: deliveryFee === 0 ? 'scheduled' : 'awaiting_payment',
         hasBuyerReviewed: false,
         createdAt: new Date().toISOString()
       };
 
-      // Decrement inventory stock on each purchased item and sync to database
-      for (const item of items) {
-        const prod = this.products.find((p) => p.id === item.product.id);
-        if (prod) {
-          prod.stock = Math.max(0, prod.stock - item.quantity);
-          updateProductInFirestore(prod.id, { stock: prod.stock }).catch((err) => {
-            console.warn('Stock decrement sync warning:', err);
-          });
-        }
-      }
-
       this.orders.unshift(newOrder);
       createdOrders.push(newOrder);
-
-      // Save to cloud Firestore
-      saveOrderToFirestore(newOrder).catch((err) => {
-        console.warn('Firestore order create sync warning:', err);
-      });
     }
 
     this.clearCart();
@@ -763,6 +888,34 @@ class Store {
       return { success: false, error: 'This item has already been paid for.' };
     }
 
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch('/api/orders/pay-item', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers
+        },
+        body: JSON.stringify({
+          orderId,
+          itemId: item.id,
+          itemCode: item.itemCode
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success && data.order) {
+        const idx = this.orders.findIndex(o => o.id === orderId);
+        if (idx !== -1) {
+          this.orders[idx] = data.order;
+        }
+        this.save();
+        return { success: true, order: data.order, item: data.order.items.find((i: any) => i.id === itemId) };
+      }
+    } catch (apiErr) {
+      console.warn('API pay item warning:', apiErr);
+    }
+
     const itemCost = item.price * item.quantity;
     const ref = `PAYSTACK_ITEM_${item.itemCode}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
@@ -772,8 +925,9 @@ class Store {
     item.paymentReference = ref;
 
     order.itemsTotalPaid = (order.itemsTotalPaid || 0) + itemCost;
+    order.goodsPaid = (order.goodsPaid || 0) + itemCost;
 
-    const allPaid = order.items.every((i) => i.status === 'paid');
+    const allPaid = order.items.every((i) => i.status === 'paid' || i.status === 'rejected');
     if (allPaid) {
       order.status = 'paid_completed';
       order.paymentStatus = 'paid_completed';
@@ -783,35 +937,6 @@ class Store {
       order.status = 'partially_paid';
       order.paymentStatus = 'partially_paid';
     }
-
-    // Direct settlement to seller ledger
-    const sellerUser = this.users.find((u) => u.id === order.sellerId);
-    if (sellerUser) {
-      sellerUser.salesCount = (sellerUser.salesCount || 0) + 1;
-    }
-
-    const payout: PayoutRecord = {
-      id: `settle_${item.id}_${Date.now()}`,
-      orderId: order.id,
-      orderNumber: `${order.orderNumber} (${item.itemCode})`,
-      sellerId: order.sellerId,
-      sellerName: order.sellerName,
-      bankName: sellerUser?.bankDetails?.bankName || 'Verified Vendor Settlement Account',
-      accountNumberMasked: sellerUser?.bankDetails?.accountNumberMasked || 'Verified Account',
-      amount: itemCost,
-      commissionDeducted: 0,
-      status: 'confirmed',
-      idempotencyKey: `payout_item_${item.id}_${Date.now()}`,
-      reference: ref,
-      initiatedAt: new Date().toISOString(),
-      confirmedAt: new Date().toISOString()
-    };
-    this.payouts.unshift(payout);
-
-    // Sync to Firestore
-    updateOrderInFirestore(order.id, order).catch((err) => {
-      console.warn('Order sync warning on item payment:', err);
-    });
 
     this.save();
     return { success: true, order, item };
@@ -833,6 +958,20 @@ class Store {
       return { success: false, error: 'All items in this parcel have already been paid for.' };
     }
 
+    try {
+      const paymentInit = await this.initializePayment({
+        type: 'goods',
+        orderId: order.id,
+        itemIds: unpaidItems.map(i => i.id)
+      });
+      if (paymentInit.status && paymentInit.authorization_url) {
+        window.location.href = paymentInit.authorization_url;
+        return { success: true, order };
+      }
+    } catch (apiErr) {
+      console.warn('API pay vendor order init warning:', apiErr);
+    }
+
     const now = new Date().toISOString();
     const batchRef = `PAYSTACK_VENDOR_${order.orderNumber}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
@@ -847,38 +986,11 @@ class Store {
     });
 
     order.itemsTotalPaid = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.goodsPaid = (order.goodsPaid || 0) + totalBatchAmount;
     order.status = 'paid_completed';
     order.paymentStatus = 'paid_completed';
     order.completedAt = now;
     order.deliveredAt = now;
-
-    const sellerUser = this.users.find((u) => u.id === order.sellerId);
-    if (sellerUser) {
-      sellerUser.salesCount = (sellerUser.salesCount || 0) + unpaidItems.length;
-    }
-
-    const payout: PayoutRecord = {
-      id: `settle_vendor_${order.id}_${Date.now()}`,
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      sellerId: order.sellerId,
-      sellerName: order.sellerName,
-      bankName: sellerUser?.bankDetails?.bankName || 'Verified Vendor Settlement Account',
-      accountNumberMasked: sellerUser?.bankDetails?.accountNumberMasked || 'Verified Account',
-      amount: totalBatchAmount,
-      commissionDeducted: order.platformCommission || 0,
-      status: 'confirmed',
-      idempotencyKey: `payout_order_${order.id}_${Date.now()}`,
-      reference: batchRef,
-      initiatedAt: now,
-      confirmedAt: now
-    };
-    this.payouts.unshift(payout);
-
-    // Sync to Firestore
-    updateOrderInFirestore(order.id, order).catch((err) => {
-      console.warn('Order sync warning on vendor payment:', err);
-    });
 
     this.save();
     return { success: true, order };
@@ -899,6 +1011,258 @@ class Store {
     });
     this.save();
     return true;
+  }
+
+  public async markOrderDelivered(orderId: string): Promise<{ success: boolean; message?: string; error?: string; order?: Order }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/orders/${orderId}/mark-delivered`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to mark order delivered' };
+      }
+      if (data.order) {
+        const idx = this.orders.findIndex((o) => o.id === orderId);
+        if (idx !== -1) this.orders[idx] = data.order;
+        this.save();
+      }
+      return { success: true, message: data.message, order: data.order };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async rejectOrderItem(
+    orderId: string,
+    itemId: string,
+    reason: string
+  ): Promise<{ success: boolean; message?: string; error?: string; order?: Order }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/orders/${orderId}/items/${itemId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ reason })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to reject item' };
+      }
+      if (data.order) {
+        const idx = this.orders.findIndex((o) => o.id === orderId);
+        if (idx !== -1) this.orders[idx] = data.order;
+        this.save();
+      }
+      return { success: true, message: data.message, order: data.order };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async cancelOrder(
+    orderId: string,
+    reason?: string
+  ): Promise<{ success: boolean; message?: string; error?: string; order?: Order }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/orders/${orderId}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ reason })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to cancel order' };
+      }
+      if (data.order) {
+        const idx = this.orders.findIndex((o) => o.id === orderId);
+        if (idx !== -1) this.orders[idx] = data.order;
+        this.save();
+      }
+      return { success: true, message: data.message, order: data.order };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async submitRefundBankDetails(
+    orderId: string,
+    details: { bankName: string; accountNumber: string; accountName: string }
+  ): Promise<{ success: boolean; message?: string; error?: string; order?: Order }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/orders/${orderId}/refund/bank-details`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(details)
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error || 'Failed to save refund details' };
+      if (data.order) {
+        const idx = this.orders.findIndex((o) => o.id === orderId);
+        if (idx !== -1) this.orders[idx] = data.order;
+        this.save();
+      }
+      return { success: true, message: data.message, order: data.order };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async markRefundSent(orderId: string): Promise<{ success: boolean; message?: string; error?: string; order?: Order }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/orders/${orderId}/refund/mark-sent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers }
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error || 'Failed to mark refund sent' };
+      if (data.order) {
+        const idx = this.orders.findIndex((o) => o.id === orderId);
+        if (idx !== -1) this.orders[idx] = data.order;
+        this.save();
+      }
+      return { success: true, message: data.message, order: data.order };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async confirmRefundReceived(orderId: string): Promise<{ success: boolean; message?: string; error?: string; order?: Order }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/orders/${orderId}/refund/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers }
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error || 'Failed to confirm refund' };
+      if (data.order) {
+        const idx = this.orders.findIndex((o) => o.id === orderId);
+        if (idx !== -1) this.orders[idx] = data.order;
+        this.save();
+      }
+      return { success: true, message: data.message, order: data.order };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async disputeRefund(orderId: string, description?: string): Promise<{ success: boolean; message?: string; error?: string; order?: Order }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/orders/${orderId}/refund/dispute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ description })
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error || 'Failed to dispute refund' };
+      if (data.order) {
+        const idx = this.orders.findIndex((o) => o.id === orderId);
+        if (idx !== -1) this.orders[idx] = data.order;
+        this.save();
+      }
+      return { success: true, message: data.message, order: data.order };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async reportBuyerRefusal(orderId: string, reason: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/orders/${orderId}/report-buyer-refusal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ reason })
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error || 'Failed to report buyer refusal' };
+      return { success: true, message: data.message };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async banUser(userId: string): Promise<{ success: boolean; message?: string; error?: string; bannedUntilMs?: number }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/admin/users/${userId}/ban`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers }
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error || 'Failed to ban user' };
+      return { success: true, message: data.message, bannedUntilMs: data.bannedUntilMs };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async submitOrderComplaint(orderId: string, reason: string, description: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/orders/${orderId}/complaint`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ reason, description })
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error || 'Failed to submit complaint' };
+      return { success: true, message: data.message };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async resolveAdminDispute(disputeId: string, note: string, type?: 'refund_buyer' | 'release_seller'): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/admin/disputes/${disputeId}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ resolutionNote: note, resolutionType: type })
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error || 'Failed to resolve dispute' };
+      return { success: true, message: data.message };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async fetchAdminQueues(): Promise<{
+    overdueOrders: any[];
+    buyerNonPaymentReports: any[];
+    unconfirmedRefunds: any[];
+    openComplaints: any[];
+    strikesBySeller: Record<string, number>;
+  } | null> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch('/api/admin/queues', {
+        headers: { ...headers }
+      });
+      if (res.ok) return await res.json();
+    } catch (err) {
+      console.warn('fetchAdminQueues error:', err);
+    }
+    return null;
+  }
+
+  public isOrderOverdue(order: Order): boolean {
+    if (!order.deliveryDeadlineMs) return false;
+    if (order.status === 'paid_completed' || order.status === 'cancelled') return false;
+    return Date.now() > order.deliveryDeadlineMs || order.sellerDefault === true;
+  }
+
+  public getSellerStrikes(sellerId: string): number {
+    return this.orders.filter((o) => o.sellerId === sellerId && o.sellerDefault === true).length;
   }
 
   public async createOrder(data: {
@@ -929,88 +1293,7 @@ class Store {
     return this.orders.find((o) => o.id === id);
   }
 
-  /**
-   * Server-Authoritative Delivery OTP Verification Handshake
-   * Validates code against Firestore on the server and releases payout.
-   */
-  public async verifyDeliveryOtp(
-    orderId: string,
-    submittedOtp: string,
-    sellerId: string
-  ): Promise<{ success: boolean; error?: string; order?: Order; attemptsLeft?: number }> {
-    const cleanOtp = submittedOtp.trim();
-    if (!/^\d{6}$/.test(cleanOtp)) {
-      return { success: false, error: 'Please enter a valid 6-digit numeric delivery code.' };
-    }
 
-    try {
-      const response = await fetch('/api/orders/verify-delivery-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId,
-          submittedOtp: cleanOtp,
-          sellerId
-        })
-      });
-
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
-        const order = this.orders.find((o) => o.id === orderId);
-        if (order && typeof result.attemptsLeft === 'number') {
-          order.otpFailedAttempts = 5 - result.attemptsLeft;
-          this.save();
-        }
-        return {
-          success: false,
-          error: result.error || 'Failed to verify delivery code.',
-          attemptsLeft: result.attemptsLeft
-        };
-      }
-
-      // Mark delivered locally as confirmed by authoritative server response
-      const order = this.orders.find((o) => o.id === orderId);
-      if (order) {
-        order.status = 'delivered';
-        order.paymentStatus = 'payout_released';
-        order.deliveredAt = result.deliveredAt || new Date().toISOString();
-        order.otpFailedAttempts = 0;
-
-        const sellerUser = this.users.find((u) => u.id === order.sellerId);
-        if (sellerUser) {
-          sellerUser.salesCount = (sellerUser.salesCount || 0) + 1;
-        }
-
-        // Record confirmed payout in local ledger
-        const payout: PayoutRecord = {
-          id: `payout_${order.id}_${Date.now()}`,
-          orderId: order.id,
-          orderNumber: order.orderNumber,
-          sellerId: order.sellerId,
-          sellerName: order.sellerName,
-          bankName: sellerUser?.bankDetails?.bankName || 'Verified Vendor Settlement',
-          accountNumberMasked: sellerUser?.bankDetails?.accountNumberMasked || 'Verified Account',
-          amount: order.sellerPayoutAmount,
-          commissionDeducted: order.platformCommission,
-          status: 'confirmed',
-          idempotencyKey: `payout_${order.id}_${Date.now()}`,
-          reference: `PAYOUT_CONFIRMED_${Math.random().toString(36).substring(2, 9).toUpperCase()}`,
-          initiatedAt: order.deliveredAt || new Date().toISOString(),
-          confirmedAt: order.deliveredAt || new Date().toISOString()
-        };
-
-        this.payouts.unshift(payout);
-        this.save();
-        return { success: true, order };
-      }
-
-      return { success: true };
-    } catch (err: any) {
-      console.error('Server OTP verification network error:', err);
-      return { success: false, error: 'Could not connect to escrow server. Please verify your connection.' };
-    }
-  }
 
   // --- Seller Rating & Review System ---
   public getSellerReviews(sellerId: string): SellerReview[] {
@@ -1241,87 +1524,174 @@ class Store {
     return this.verifications;
   }
 
-  public approveSellerVerification(requestId: string): boolean {
+  public async approveSellerVerification(requestId: string, sellerUserId?: string): Promise<{
+    success: boolean;
+    mismatch?: boolean;
+    message?: string;
+    sellerName?: string;
+    resolvedAccountName?: string;
+    error?: string;
+  }> {
     const req = this.verifications.find((v) => v.id === requestId);
-    if (!req) return false;
+    const userId = sellerUserId || req?.userId;
+    if (!userId) return { success: false, error: 'Seller user ID not found' };
 
-    req.status = 'approved';
-    req.rejectionReason = undefined;
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/admin/sellers/${userId}/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers
+        }
+      });
 
-    // Update user record
-    const user = this.users.find((u) => u.id === req.userId);
-    if (user) {
-      user.isVerifiedSeller = true;
-      user.sellerVerificationStatus = 'verified';
-      user.role = 'seller';
-      if (req.bankName && req.accountNumber) {
-        user.bankDetails = {
-          bankName: req.bankName,
-          accountNumberMasked: `******${req.accountNumber.slice(-4)}`,
-          accountName: req.accountName || user.name
-        };
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.mismatch) {
+          return {
+            success: false,
+            mismatch: true,
+            message: data.message,
+            sellerName: data.sellerName,
+            resolvedAccountName: data.resolvedAccountName
+          };
+        }
+        return { success: false, error: data.error || 'Server approval failed' };
       }
-      if (this.currentUser.id === user.id) {
-        this.currentUser.isVerifiedSeller = true;
-        this.currentUser.sellerVerificationStatus = 'verified';
+
+      // Update local state: approved_pending_fee
+      if (req) {
+        req.status = 'approved';
+        req.rejectionReason = undefined;
+      }
+
+      const user = this.users.find((u) => u.id === userId);
+      if (user) {
+        user.sellerVerificationStatus = 'approved_pending_fee';
+        user.role = 'seller';
+        user.subaccountCode = data.subaccountCode;
+      }
+      if (this.currentUser.id === userId) {
+        this.currentUser.sellerVerificationStatus = 'approved_pending_fee';
         this.currentUser.role = 'seller';
-        this.currentUser.bankDetails = user.bankDetails;
+        this.currentUser.subaccountCode = data.subaccountCode;
       }
+
+      this.save();
+      return { success: true, message: data.message };
+    } catch (err: any) {
+      console.error('Approve seller API exception:', err);
+      return { success: false, error: err.message };
     }
-
-    // Update any products by this seller to show verified badge
-    this.products.forEach((p) => {
-      if (p.sellerId === req.userId) {
-        p.sellerVerified = true;
-      }
-    });
-
-    this.save();
-
-    // Persist approval state to Firestore
-    updateVerificationInFirestore(req.id, {
-      status: 'approved',
-      rejectionReason: undefined
-    }).catch((err) => console.warn('Firestore verification approval warning:', err));
-
-    if (user) {
-      updateUserInFirestore(user.id, {
-        isVerifiedSeller: true,
-        sellerVerificationStatus: 'verified',
-        role: 'seller',
-        bankDetails: user.bankDetails
-      }).catch((err) => console.warn('Firestore user verification update warning:', err));
-    }
-
-    return true;
   }
 
-  public rejectSellerVerification(requestId: string, reason: string): boolean {
+  public async rejectSellerVerification(requestId: string, reason: string, sellerUserId?: string): Promise<boolean> {
     const req = this.verifications.find((v) => v.id === requestId);
-    if (!req) return false;
+    const userId = sellerUserId || req?.userId;
 
-    req.status = 'rejected';
-    req.rejectionReason = reason;
+    if (userId) {
+      try {
+        const headers = await this.getAuthHeader();
+        await fetch(`/api/admin/sellers/${userId}/reject`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({ reason })
+        });
+      } catch (err) {
+        console.warn('Reject seller API call notice:', err);
+      }
+    }
 
-    const user = this.users.find((u) => u.id === req.userId);
+    if (req) {
+      req.status = 'rejected';
+      req.rejectionReason = reason;
+    }
+
+    const user = this.users.find((u) => u.id === (userId || req?.userId));
     if (user) {
       user.sellerVerificationStatus = 'rejected';
       if (this.currentUser.id === user.id) {
         this.currentUser.sellerVerificationStatus = 'rejected';
       }
-      updateUserInFirestore(user.id, {
-        sellerVerificationStatus: 'rejected'
-      }).catch((err) => console.warn('Firestore user verification rejection warning:', err));
     }
 
     this.save();
-
-    updateVerificationInFirestore(req.id, {
-      status: 'rejected',
-      rejectionReason: reason
-    }).catch((err) => console.warn('Firestore verification rejection warning:', err));
-
     return true;
+  }
+
+  public async suspendSeller(userId: string, durationDays: number = 30): Promise<boolean> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/admin/sellers/${userId}/suspend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ durationDays })
+      });
+      if (res.ok) {
+        const user = this.users.find((u) => u.id === userId);
+        if (user) user.suspendedUntilMs = Date.now() + (durationDays * 24 * 3600 * 1000);
+        this.save();
+        return true;
+      }
+    } catch (err) {
+      console.warn('Suspend seller API notice:', err);
+    }
+    return false;
+  }
+
+  public async unsuspendSeller(userId: string): Promise<boolean> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch(`/api/admin/sellers/${userId}/unsuspend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers }
+      });
+      if (res.ok) {
+        const user = this.users.find((u) => u.id === userId);
+        if (user) user.suspendedUntilMs = 0;
+        this.save();
+        return true;
+      }
+    } catch (err) {
+      console.warn('Unsuspend seller API notice:', err);
+    }
+    return false;
+  }
+
+  public async requestBankChange(bankDetails: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  }): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      const headers = await this.getAuthHeader();
+      const res = await fetch('/api/sellers/bank-change-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(bankDetails)
+      });
+      const data = await res.json();
+      return data;
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async payVendorFee(sellerId: string): Promise<{ success: boolean; authorization_url?: string; error?: string }> {
+    try {
+      const init = await this.initializePayment({
+        type: 'vendor_fee',
+        sellerId
+      });
+      if (init.status && init.authorization_url) {
+        window.location.href = init.authorization_url;
+        return { success: true, authorization_url: init.authorization_url };
+      }
+      return { success: false, error: init.error || 'Could not initialize vendor fee payment' };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
   }
 
   public getPayouts(): PayoutRecord[] {
@@ -1390,7 +1760,7 @@ class Store {
 
     const platformCommissionCollected = this.orders
       .filter((o) => o.paymentStatus === 'payout_released')
-      .reduce((sum, o) => sum + o.platformCommission, 0);
+      .reduce((sum, o) => sum + (o.platformCommission || 0), 0);
 
     const pendingEscrowAmount = this.orders
       .filter((o) => o.paymentStatus === 'escrow_held')

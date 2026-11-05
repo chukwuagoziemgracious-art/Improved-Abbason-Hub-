@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Store, 
@@ -21,7 +21,9 @@ import {
   Building2,
   Info,
   Calculator,
-  Percent
+  Percent,
+  Sparkles,
+  Lock
 } from 'lucide-react';
 import { store } from '../services/store';
 import { formatNaira, calculatePlatformCommission } from '../utils/currency';
@@ -43,13 +45,6 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'orders' | 'listings' | 'earnings' | 'reviews' | 'verification'>('orders');
   const [isBankSwitcherOpen, setIsBankSwitcherOpen] = useState(false);
-  
-  // Handover OTP Modal state
-  const [selectedOrderForHandover, setSelectedOrderForHandover] = useState<Order | null>(null);
-  const [submittedOtp, setSubmittedOtp] = useState('');
-  const [otpError, setOtpError] = useState<string | null>(null);
-  const [otpSuccessMessage, setOtpSuccessMessage] = useState<string | null>(null);
-  const [isSubmittingOtp, setIsSubmittingOtp] = useState(false);
 
   // Verification request state
   const [matricNumber, setMatricNumber] = useState('2022/ENG/04912');
@@ -85,41 +80,131 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
 
   if (!isOpen) return null;
 
-  // Wallet metrics
-  const availableBalance = completedOrders.reduce((sum, o) => sum + o.sellerPayoutAmount, 0);
-  const pendingInspection = pendingHandoverOrders.reduce((sum, o) => sum + o.sellerPayoutAmount, 0);
-  const totalCommissionPaid = completedOrders.reduce((sum, o) => sum + o.platformCommission, 0);
+  // Vendor Fee Status & Payment
+  const [vendorFeeStatus, setVendorFeeStatus] = useState<{
+    paidCount: number;
+    earlyLimit: number;
+    fee: number;
+    gatewayFee: number;
+    totalWithGateway: number;
+    isEarlyBird: boolean;
+  } | null>(null);
+  const [isPayingFee, setIsPayingFee] = useState(false);
 
-  const handleVerifyOtpSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedOrderForHandover || !submittedOtp.trim()) return;
+  useEffect(() => {
+    fetch('/api/vendor-fee/status')
+      .then((res) => res.json())
+      .then((data) => setVendorFeeStatus(data))
+      .catch(() => {});
+  }, [isOpen]);
 
-    setIsSubmittingOtp(true);
-    setOtpError(null);
-    setOtpSuccessMessage(null);
-
-    const result = await store.verifyDeliveryOtp(
-      selectedOrderForHandover.id,
-      submittedOtp.trim(),
-      currentUser.id
-    );
-
-    setIsSubmittingOtp(false);
-
-    if (result.success) {
-      const payoutText = result.order?.sellerPayoutAmount ? formatNaira(result.order.sellerPayoutAmount) : 'Payout';
-      setOtpSuccessMessage(
-        `Delivery confirmed! ${payoutText} credited to your wallet (3% platform fee capped at ₦2,000 deducted).`
-      );
-      setTimeout(() => {
-        setSelectedOrderForHandover(null);
-        setSubmittedOtp('');
-        setOtpSuccessMessage(null);
-      }, 2500);
-    } else {
-      setOtpError(result.error || 'Failed to verify delivery code.');
+  const handlePayVendorFee = async () => {
+    setIsPayingFee(true);
+    try {
+      await store.payVendorFee(currentUser.id);
+    } catch (err: any) {
+      console.error('Vendor fee payment error:', err);
+    } finally {
+      setIsPayingFee(false);
     }
   };
+
+  const sellerStrikes = store.getSellerStrikes(currentUser.id);
+  const [refusalOrderId, setRefusalOrderId] = useState<string | null>(null);
+  const [refusalReason, setRefusalReason] = useState('Buyer refused payment after inspecting problem-free item');
+  const [isSubmittingRefusal, setIsSubmittingRefusal] = useState(false);
+  const [sellerActionFeedback, setSellerActionFeedback] = useState<string | null>(null);
+
+  const handleMarkDelivered = async (orderId: string) => {
+    const res = await store.markOrderDelivered(orderId);
+    if (res.success) {
+      setSellerActionFeedback('Parcel marked delivered. Student can now inspect and complete payment.');
+    } else {
+      setSellerActionFeedback(res.error || 'Failed to mark delivered.');
+    }
+  };
+
+  const handleSellerCancelOrder = async (orderId: string) => {
+    if (!window.confirm('Cancel this order? If an upfront delivery fee was paid, you will owe a 1x refund by bank transfer outside the app.')) return;
+    const res = await store.cancelOrder(orderId, 'seller_cancelled');
+    if (res.success) {
+      setSellerActionFeedback('Order cancelled. Refund obligation recorded.');
+    } else {
+      setSellerActionFeedback(res.error || 'Failed to cancel order.');
+    }
+  };
+
+  const handleMarkRefundSent = async (orderId: string) => {
+    const res = await store.markRefundSent(orderId);
+    if (res.success) {
+      setSellerActionFeedback('Refund marked as sent. Buyer will be asked to confirm receipt.');
+    } else {
+      setSellerActionFeedback(res.error || 'Failed to update refund.');
+    }
+  };
+
+  const handleConfirmBuyerRefusal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!refusalOrderId) return;
+    setIsSubmittingRefusal(true);
+    try {
+      const res = await store.reportBuyerRefusal(refusalOrderId, refusalReason);
+      if (res.success) {
+        setSellerActionFeedback('Report submitted. Administrator will review for 30-day buyer suspension.');
+        setRefusalOrderId(null);
+      } else {
+        setSellerActionFeedback(res.error || 'Failed to submit report.');
+      }
+    } finally {
+      setIsSubmittingRefusal(false);
+    }
+  };
+
+  // Confirmed Paid Items (Only server-confirmed payments)
+  const paidItemsList: Array<{
+    orderId: string;
+    orderNumber: string;
+    buyerName: string;
+    campusName: string;
+    item: any;
+    grossPrice: number;
+    commission: number;
+    netPayout: number;
+    paidAt?: string;
+  }> = [];
+
+  allOrders.forEach((o) => {
+    (o.items || []).forEach((item) => {
+      if (item.status === 'paid') {
+        const grossPrice = item.price * item.quantity;
+        const commission = Math.round(grossPrice * 0.03);
+        const netPayout = grossPrice - commission;
+        paidItemsList.push({
+          orderId: o.id,
+          orderNumber: o.orderNumber,
+          buyerName: o.buyerName,
+          campusName: o.campusName,
+          item,
+          grossPrice,
+          commission,
+          netPayout,
+          paidAt: item.paidAt
+        });
+      }
+    });
+  });
+
+  const totalConfirmedGoodsNet = paidItemsList.reduce((sum, i) => sum + i.netPayout, 0);
+  const totalConfirmedCommission = paidItemsList.reduce((sum, i) => sum + i.commission, 0);
+  const deliveryFeesReceived = allOrders
+    .filter((o) => o.deliveryFeePaid && (o.deliveryFee || 0) > 0)
+    .reduce((sum, o) => sum + (o.deliveryFee || 0), 0);
+  const totalConfirmedEarnings = totalConfirmedGoodsNet + deliveryFeesReceived;
+  const availableBalance = totalConfirmedEarnings;
+  const pendingInspection = pendingHandoverOrders.reduce((sum, o) => sum + (o.goodsDue || 0), 0);
+  const totalCommissionPaid = totalConfirmedCommission;
+
+
 
   const handleVerificationRequest = (e: React.FormEvent) => {
     e.preventDefault();
@@ -164,6 +249,12 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                     Verification Required
                   </span>
                 )}
+                {sellerStrikes > 0 && (
+                  <span className="px-2 py-0.5 rounded-[4px] bg-rose-950/80 border border-rose-500/50 text-rose-300 font-medium text-[9px] uppercase tracking-wider flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-rose-400" />
+                    <span>{sellerStrikes} {sellerStrikes === 1 ? 'Strike' : 'Strikes'}</span>
+                  </span>
+                )}
               </div>
               <p className="text-xs text-[#8C9399] font-light">
                 {currentUser.campusName} · ⭐ {ratingSummary.average} ({ratingSummary.count} reviews)
@@ -191,8 +282,28 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
           </div>
         </div>
 
-        {/* Unverified Warning Gate if not verified */}
-        {!isVerified && (
+        {/* Verification Status Banner */}
+        {currentUser.sellerVerificationStatus === 'approved_pending_fee' ? (
+          <div className="m-4 p-4 rounded-[6px] bg-emerald-950/40 border border-emerald-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-3">
+              <Sparkles className="w-6 h-6 text-emerald-400 shrink-0" />
+              <div>
+                <p className="font-medium text-white text-sm font-serif">Bank Account Verified · Pay Your Vendor Fee to Start Selling</p>
+                <p className="text-emerald-200/80 text-xs font-light">
+                  Your student credentials and Paystack subaccount are configured. Pay the registration fee ({vendorFeeStatus?.isEarlyBird ? '₦2,000 Early Bird' : '₦5,000 Standard'}) to activate your storefront.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handlePayVendorFee}
+              disabled={isPayingFee}
+              className="px-4 py-2.5 rounded-[4px] bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-xs uppercase tracking-[0.15em] shrink-0 cursor-pointer shadow transition-all flex items-center gap-2 disabled:opacity-50"
+            >
+              <Lock className="w-3.5 h-3.5 text-black" />
+              <span>{isPayingFee ? 'Opening Paystack...' : `Pay ${vendorFeeStatus ? formatNaira(vendorFeeStatus.totalWithGateway) : '₦2,030'} via Paystack`}</span>
+            </button>
+          </div>
+        ) : !isVerified ? (
           <div className="m-4 p-4 rounded-[6px] bg-[#0e0c08]/80 border border-[#C8A96A]/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-3">
               <ShieldCheck className="w-6 h-6 text-[#C8A96A] shrink-0" />
@@ -213,7 +324,7 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
               Apply for Verification
             </button>
           </div>
-        )}
+        ) : null}
 
         {/* Tab Navigation */}
         <div className="flex border-b border-white/[0.08] bg-white/[0.01] px-4 overflow-x-auto text-xs font-medium">
@@ -285,6 +396,18 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
 
         {/* Tab Body Content */}
         <div className="overflow-y-auto p-4 sm:p-6 space-y-6">
+          {sellerActionFeedback && (
+            <div className="p-3 rounded-xl bg-blue-950/70 border border-blue-500/50 text-blue-200 text-xs flex items-center justify-between">
+              <span>{sellerActionFeedback}</span>
+              <button
+                onClick={() => setSellerActionFeedback(null)}
+                className="text-blue-300 hover:text-white font-bold ml-2 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* TAB 1: ORDERS & HANDOVER OTP INPUT */}
           {activeTab === 'orders' && (
             <div className="space-y-4">
@@ -310,12 +433,28 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                     return (
                       <div
                         key={order.id}
-                        className="p-4 rounded-2xl bg-white/[0.03] border border-[#C8A96A]/40 shadow-md text-xs space-y-3"
+                        className={`p-4 rounded-2xl border text-xs space-y-3 ${
+                          store.isOrderOverdue(order)
+                            ? 'bg-rose-950/20 border-rose-500/50 shadow-md'
+                            : 'bg-white/[0.03] border-[#C8A96A]/40 shadow-md'
+                        }`}
                       >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="font-bold text-white text-sm font-mono">#{order.orderNumber}</span>
-                            {order.status === 'delivery_fee_paid' ? (
+
+                            {store.isOrderOverdue(order) && (
+                              <span className="px-2 py-0.5 rounded bg-rose-950 border border-rose-500/60 text-rose-300 font-bold text-[10px] flex items-center gap-1">
+                                <AlertTriangle className="w-3 h-3 text-rose-400" />
+                                <span>Overdue</span>
+                              </span>
+                            )}
+
+                            {order.status === 'cancelled' ? (
+                              <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-400 font-medium text-[10px]">
+                                Cancelled ({order.cancelReason === 'seller_cancelled' ? 'by you' : 'by buyer'})
+                              </span>
+                            ) : order.status === 'delivery_fee_paid' ? (
                               <span className="px-2 py-0.5 rounded bg-[#C8A96A]/20 border border-[#C8A96A]/50 text-[#C8A96A] font-bold text-[10px]">
                                 Transport Secured · Ready to Dispatch
                               </span>
@@ -330,6 +469,10 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                             ) : order.status === 'partially_paid' ? (
                               <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/50 text-emerald-300 font-bold text-[10px]">
                                 Partially Paid (Handover in Progress)
+                              </span>
+                            ) : order.status === 'paid_completed' ? (
+                              <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/50 text-emerald-400 font-bold text-[10px]">
+                                Paid & Completed
                               </span>
                             ) : (
                               <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-600/50 text-amber-300 font-bold text-[10px]">
@@ -354,8 +497,60 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                           </div>
                         )}
 
+                        {/* Refund Card if refund active */}
+                        {order.refund && (
+                          <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="font-medium text-amber-200 flex items-center gap-1.5">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                                <span>Delivery Fee Refund {((order.refund.multiplier || 1) > 1) ? `(${order.refund.multiplier}x Penalty)` : '(1x Refund)'}</span>
+                              </div>
+                              <span className="font-mono font-bold text-amber-400">{formatNaira(order.refund.owedAmount || order.refund.amountOwed || 0)}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-300">
+                              Destination:{' '}
+                              {order.refundAccount ? (
+                                <strong className="text-white">
+                                  {order.refundAccount.bankName} - {order.refundAccount.accountNumber} ({order.refundAccount.accountName})
+                                </strong>
+                              ) : (
+                                <span className="text-amber-300 italic">Awaiting buyer to enter refund bank account</span>
+                              )}
+                            </div>
+                            {order.refund.status === 'owed' && order.refundAccount && (
+                              <button
+                                type="button"
+                                onClick={() => handleMarkRefundSent(order.id)}
+                                className="w-full py-2 rounded-lg bg-[#C8A96A] hover:bg-[#b89858] text-black font-semibold text-xs cursor-pointer shadow"
+                              >
+                                I Have Sent The Refund (Outside App)
+                              </button>
+                            )}
+                            {order.refund.status === 'paid_claimed' && (
+                              <div className="text-[11px] text-emerald-300 font-medium">
+                                Marked as sent. Awaiting buyer confirmation.
+                              </div>
+                            )}
+                            {order.refund.status === 'confirmed' && (
+                              <div className="text-[11px] text-emerald-300 font-medium flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Buyer confirmed refund receipt.</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         <div className="p-3 rounded-xl bg-[#0B1120] border border-white/[0.08] space-y-2 text-slate-300">
-                          <div className="text-white font-medium">Buyer: {order.buyerName} ({order.buyerPhone})</div>
+                          <div className="text-white font-medium flex flex-wrap items-center justify-between gap-1">
+                            <span>Buyer: {order.buyerName}</span>
+                            <span className="text-[11px] text-slate-400 font-normal">
+                              {(!order.contactRevealAtMs || Date.now() >= order.contactRevealAtMs) ? (
+                                <span className="text-emerald-400">Phone: {order.buyerPhone || 'Not provided'}</span>
+                              ) : (
+                                <span className="text-slate-500 italic">Phone unlocks 48h before deadline</span>
+                              )}
+                            </span>
+                          </div>
                           <div className="text-slate-400 flex items-center gap-1">
                             <Truck className="w-3.5 h-3.5 text-[#C8A96A]" />
                             <span>Delivery to: {order.deliveryInstructions || order.buyerHostel}</span>
@@ -372,8 +567,10 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                                   <span className="font-mono text-[#C8A96A] bg-[#020406] px-1.5 py-0.5 rounded border border-[#C8A96A]/30 text-[10px]">
                                     {i.itemCode}
                                   </span>
-                                  <span className={`text-[10px] font-medium ${i.status === 'paid' ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                    {i.status === 'paid' ? '✓ Paid' : 'Pending'}
+                                  <span className={`text-[10px] font-medium ${
+                                    i.status === 'paid' ? 'text-emerald-400' : i.status === 'rejected' ? 'text-rose-400' : 'text-amber-400'
+                                  }`}>
+                                    {i.status === 'paid' ? '✓ Paid' : i.status === 'rejected' ? '✗ Rejected' : 'Pending'}
                                   </span>
                                 </div>
                               </div>
@@ -386,39 +583,32 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                             Transport: {formatNaira(order.upfrontTotalPaid || order.deliveryFee)} (Paid upfront)
                           </div>
 
-                          <div className="flex items-center gap-2">
-                            {order.status === 'delivery_fee_paid' && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            {order.status !== 'delivered_pending_inspection' && order.status !== 'paid_completed' && order.status !== 'cancelled' && (
                               <button
-                                onClick={() => handleUpdateOrderStatus(order.id, 'in_transit')}
-                                className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                              >
-                                <Truck className="w-3.5 h-3.5" />
-                                <span>Mark In-Transit to Hostel</span>
-                              </button>
-                            )}
-
-                            {order.status === 'in_transit' && (
-                              <button
-                                onClick={() => handleUpdateOrderStatus(order.id, 'delivered_pending_inspection')}
+                                onClick={() => handleMarkDelivered(order.id)}
                                 className="px-3 py-1.5 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-semibold text-xs flex items-center gap-1 cursor-pointer transition-colors"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>Mark Arrived at Hostel</span>
+                                <span>Mark Delivered (Arrived at Meeting Point)</span>
                               </button>
                             )}
 
-                            {/* Legacy OTP verification button */}
-                            {order.otpHash && (
+                            {(order.status === 'delivered_pending_inspection' || order.status === 'partially_paid') && !order.buyerReportedRefusal && (
                               <button
-                                onClick={() => {
-                                  setSelectedOrderForHandover(order);
-                                  setSubmittedOtp('');
-                                  setOtpError(null);
-                                }}
-                                className="px-3 py-1.5 rounded-xl bg-[#f3c84b] hover:bg-[#eab308] text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow cursor-pointer"
+                                onClick={() => setRefusalOrderId(order.id)}
+                                className="px-2.5 py-1.5 rounded-xl bg-white/[0.04] text-rose-300 hover:bg-rose-950/60 border border-white/[0.08] text-[11px] cursor-pointer transition-colors"
                               >
-                                <KeyRound className="w-3.5 h-3.5" />
-                                <span>Enter Code</span>
+                                Report Buyer Refused Payment
+                              </button>
+                            )}
+
+                            {order.status !== 'paid_completed' && order.status !== 'cancelled' && (
+                              <button
+                                onClick={() => handleSellerCancelOrder(order.id)}
+                                className="px-2.5 py-1.5 rounded-xl bg-white/[0.04] text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 border border-white/[0.08] text-[11px] cursor-pointer transition-colors"
+                              >
+                                Cancel Order
                               </button>
                             )}
                           </div>
@@ -500,7 +690,7 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                     </span>
                   </div>
                   <p className="text-[#8C9399] text-[11px] leading-relaxed font-light">
-                    This dashboard displays automated calculations of your sales and platform commissions. <strong>Abbason Hub does not hold your funds.</strong> Payments are settled directly via Paystack into your selected Nigerian bank account once the student inspects and completes payment in the app.
+                    This dashboard displays automated calculations of your sales and platform commissions. <strong>Abbason Hub does not hold your funds.</strong> Payments are settled directly via Paystack subaccount splits into your selected Nigerian bank account once the student inspects and completes payment in the app.
                   </p>
                 </div>
               </div>
@@ -527,72 +717,72 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                   </div>
                   <div className="text-2xl font-bold text-[#E9E6DF] mt-1 tabular-nums font-serif">{formatNaira(totalCommissionPaid)}</div>
                   <div className="text-[10px] text-[#8C9399] mt-1 font-light">
-                    Capped at ₦2,000 max per order
+                    3% platform commission (no cap)
                   </div>
                 </div>
 
                 {/* 3. Available Paid Out */}
                 <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950/70 to-slate-900 border border-emerald-500/40">
                   <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider flex items-center justify-between">
-                    <span>Net Paid To Bank</span>
+                    <span>Net Confirmed Earnings</span>
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
                   </div>
                   <div className="text-2xl font-black text-white mt-1 tabular-nums">{formatNaira(availableBalance)}</div>
                   <div className="text-[10px] text-slate-400 mt-1">
-                    Transferred to your bank account
+                    Settled directly via Paystack split
                   </div>
                 </div>
 
-                {/* 4. Gross Sales */}
+                {/* 4. Delivery Fees Received */}
                 <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-[#131b2e] border border-slate-800">
                   <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center justify-between">
-                    <span>Gross Sales Volume</span>
-                    <Calculator className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Delivery Fees Received</span>
+                    <Truck className="w-3.5 h-3.5 text-slate-400" />
                   </div>
                   <div className="text-2xl font-black text-slate-300 mt-1 tabular-nums">
-                    {formatNaira(allOrders.reduce((sum, o) => sum + o.subtotal, 0))}
+                    {formatNaira(deliveryFeesReceived)}
                   </div>
                   <div className="text-[10px] text-slate-400 mt-1">
-                    {allOrders.length} total transaction(s)
+                    100% paid to you (0% platform cut)
                   </div>
                 </div>
               </div>
 
-              {/* Settlement Bank Details Card with Instant Switcher */}
+              {/* Settlement Bank Details Card with Request Switcher */}
               <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-1">
                     <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1.5">
-                      <Landmark className="w-3.5 h-3.5 text-[#f3c84b]" />
+                      <Landmark className="w-3.5 h-3.5 text-[#C8A96A]" />
                       <span>Settlement Payout Destination</span>
                     </div>
                     <div className="text-base font-bold text-white flex items-center gap-2">
-                      <span>{currentUser.bankDetails?.bankName || 'PalmPay'}</span>
+                      <span>{currentUser.bankDetails?.bankName || 'Verified Nigerian Bank'}</span>
                       <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/30">
-                        Verified Payout Account
+                        Paystack Subaccount Linked
                       </span>
                     </div>
                     <div className="text-xs text-slate-400 font-mono">
-                      Account: <strong className="text-slate-200">{currentUser.bankDetails?.accountNumberMasked || '******4819'}</strong> · Name: <strong className="text-slate-200">{currentUser.bankDetails?.accountName || currentUser.name}</strong>
+                      Account: <strong className="text-slate-200">{currentUser.bankDetails?.accountNumberMasked || '******'}</strong> · Name: <strong className="text-slate-200">{currentUser.bankDetails?.accountName || currentUser.name}</strong>
                     </div>
                   </div>
 
                   <button
                     type="button"
                     onClick={() => setIsBankSwitcherOpen(true)}
-                    className="px-4 py-2.5 rounded-xl bg-[#f3c84b] hover:bg-[#eab308] text-slate-950 font-bold text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer transition-transform active:scale-95 shrink-0"
+                    className="px-4 py-2.5 rounded-xl bg-[#C8A96A] hover:bg-[#b89858] text-black font-semibold text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer transition-transform active:scale-95 shrink-0"
                   >
                     <Building2 className="w-4 h-4" />
-                    <span>Change Bank Account</span>
+                    <span>Request Bank Change</span>
                   </button>
                 </div>
 
                 <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[#f3c84b] font-semibold">Supported:</span>
-                    <span>PalmPay, OPay, Moniepoint, Kuda, Access Bank, Zenith, GTBank, First Bank, UBA & all Nigerian banks.</span>
+                    <span className="text-[#C8A96A] font-semibold">Supported:</span>
+                    <span>PalmPay, OPay, Moniepoint, Kuda, Access Bank, Zenith, GTBank, First Bank, UBA & all CBN-licensed banks.</span>
                   </div>
-                  <span className="text-slate-500">Instant change anytime</span>
+                  <span className="text-amber-400 font-medium">Bank changes require admin approval</span>
                 </div>
               </div>
 
@@ -601,96 +791,151 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                 <div className="flex items-start sm:items-center gap-2.5">
                   <Calculator className="w-4 h-4 text-[#C8A96A] shrink-0 mt-0.5 sm:mt-0" />
                   <div>
-                    <span className="font-medium text-white">How 3% Commission is Calculated:</span>
+                    <span className="font-medium text-white">How Commission is Calculated:</span>
                     <span className="text-[#8C9399] ml-1 font-light">
-                      For verified campus sellers, platform takes exactly 3% of item subtotal, strictly capped at ₦2,000 maximum. Sellers keep 97%+ of their earnings.
+                      Platform takes exactly 3% of goods value (no cap). Platform takes 0% on delivery fees. The buyer pays Paystack processing fees on top. Sellers receive 97% of goods price plus 100% of delivery fees directly via Paystack split.
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* Itemized Order Calculations Ledger */}
+              {/* SECTION A: Itemized Confirmed Paid Items */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <div className="font-medium text-white uppercase tracking-wider text-[11px]">
-                    Itemized Order Earnings Ledger
+                  <div className="font-medium text-white uppercase tracking-wider text-[11px] flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Itemized Paid Items ({paidItemsList.length})</span>
                   </div>
-                  <span className="text-[10px] text-slate-400">{allOrders.length} recorded orders</span>
+                  <span className="text-[10px] text-[#8C9399]">Only server-confirmed payments</span>
                 </div>
 
-                {allOrders.length === 0 ? (
+                {paidItemsList.length === 0 ? (
                   <div className="p-6 text-center bg-white/[0.03] rounded-2xl border border-white/[0.08] text-slate-400 text-xs">
-                    No order transactions recorded yet.
+                    No items paid yet. Once students inspect items and pay on delivery, each confirmed item appears here with its 3% commission deduction and net payout.
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {allOrders.map((order) => {
-                      const isDelivered = order.status === 'delivered';
-                      return (
-                        <div
-                          key={order.id}
-                          className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/[0.08] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-                        >
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-bold text-white">Order #{order.orderNumber}</span>
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                  isDelivered
-                                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
-                                    : 'bg-amber-950 text-amber-300 border border-amber-500/40'
-                                }`}
-                              >
-                                {isDelivered ? 'Settled into Bank' : 'Pending Buyer OTP Handshake'}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-slate-400">
-                              Buyer: {order.buyerName} ({order.campusName}) · {order.items.map((i) => i.title).join(', ')}
-                            </div>
+                    {paidItemsList.map((pi, idx) => (
+                      <div
+                        key={`${pi.orderId}_${pi.item.id || idx}`}
+                        className="p-3.5 rounded-2xl bg-white/[0.03] border border-emerald-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white">{pi.item.title}</span>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-500/40">
+                              {pi.item.itemCode || 'ITM'} · Paid
+                            </span>
+                            <span className="text-[10px] text-slate-400">Order #{pi.orderNumber}</span>
                           </div>
-
-                          <div className="flex items-center gap-4 text-right shrink-0">
-                            <div>
-                              <div className="text-[10px] text-slate-500 uppercase">Gross Sales</div>
-                              <div className="font-medium text-slate-300 tabular-nums">{formatNaira(order.subtotal)}</div>
-                            </div>
-                            <div>
-                              <div className="text-[10px] text-[#8C9399] uppercase">3% Fee</div>
-                              <div className="font-medium text-[#8C9399] tabular-nums">-{formatNaira(order.platformCommission)}</div>
-                            </div>
-                            <div>
-                              <div className="text-[10px] text-emerald-400 uppercase font-semibold">Net Payout</div>
-                              <div className="font-bold text-emerald-400 tabular-nums text-sm">{formatNaira(order.sellerPayoutAmount)}</div>
-                            </div>
+                          <div className="text-[11px] text-slate-400">
+                            Buyer: {pi.buyerName} ({pi.campusName}) · Qty: {pi.item.quantity || 1}
+                            {pi.paidAt && <span className="ml-2 text-slate-500">· {new Date(pi.paidAt).toLocaleDateString()}</span>}
                           </div>
                         </div>
-                      );
-                    })}
+
+                        <div className="flex items-center gap-4 text-right shrink-0">
+                          <div>
+                            <div className="text-[10px] text-slate-500 uppercase">Gross Price</div>
+                            <div className="font-medium text-slate-300 tabular-nums">{formatNaira(pi.grossPrice)}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-[#8C9399] uppercase">3% Platform</div>
+                            <div className="font-medium text-amber-400 tabular-nums">-{formatNaira(pi.commission)}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-emerald-400 uppercase font-semibold">Net Payout</div>
+                            <div className="font-bold text-emerald-400 tabular-nums text-sm">{formatNaira(pi.netPayout)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
 
-              {/* Recent Payout Confirmations */}
-              <div className="space-y-2 pt-2">
-                <div className="font-medium text-white uppercase tracking-wider text-[11px]">
-                  Recent Bank Settlement Confirmations
-                </div>
-                {payouts.map((p) => (
-                  <div
-                    key={p.id}
-                    className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.08] flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="font-semibold text-white">Order #{p.orderNumber} Payout to {p.bankName}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">Ref: {p.reference} · Account: {p.accountNumberMasked}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-bold text-emerald-400 tabular-nums">+{formatNaira(p.amount)}</div>
-                      <div className="text-[10px] text-[#8C9399]">Fee (3%): {formatNaira(p.commissionDeducted)}</div>
-                    </div>
+              {/* SECTION B: Delivery Fees Received */}
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between">
+                  <div className="font-medium text-white uppercase tracking-wider text-[11px] flex items-center gap-2">
+                    <Truck className="w-3.5 h-3.5 text-[#C8A96A]" />
+                    <span>Delivery Transport Fees Received</span>
                   </div>
-                ))}
+                  <span className="text-[10px] text-emerald-400 font-semibold">0% Platform Cut</span>
+                </div>
+
+                {allOrders.filter((o) => o.deliveryFeePaid && (o.deliveryFee || 0) > 0).length === 0 ? (
+                  <div className="p-4 text-center bg-white/[0.02] rounded-2xl border border-white/[0.06] text-slate-400 text-xs">
+                    No delivery transport fees received yet. Upfront delivery fees paid by buyers at checkout are routed to your subaccount.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {allOrders
+                      .filter((o) => o.deliveryFeePaid && (o.deliveryFee || 0) > 0)
+                      .map((order) => (
+                        <div
+                          key={`df_${order.id}`}
+                          className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.08] flex items-center justify-between text-xs"
+                        >
+                          <div>
+                            <div className="font-medium text-white flex items-center gap-2">
+                              <span>Order #{order.orderNumber}</span>
+                              <span className="text-[10px] text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                                Upfront Delivery Paid
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              Buyer: {order.buyerName} · {order.meetingPoint?.label || order.campusName}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[10px] text-slate-500 uppercase">Transport Amount</div>
+                            <div className="font-bold text-emerald-400 tabular-nums">+{formatNaira(order.deliveryFee || 0)}</div>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
               </div>
+
+              {/* SECTION C: Orders Pending Inspection & Handover */}
+              {pendingHandoverOrders.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium text-white uppercase tracking-wider text-[11px] flex items-center gap-2">
+                      <Clock className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Pending Handover & Inspection ({pendingHandoverOrders.length})</span>
+                    </div>
+                    <span className="text-[10px] text-amber-300">Paid upon physical handover</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {pendingHandoverOrders.map((order) => (
+                      <div
+                        key={`pending_${order.id}`}
+                        className="p-3.5 rounded-2xl bg-white/[0.02] border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white">Order #{order.orderNumber}</span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-950/60 text-amber-300 border border-amber-500/30">
+                              Awaiting Handover Inspection
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            Buyer: {order.buyerName} ({order.campusName}) · Items: {order.items.map((i) => i.title).join(', ')}
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <div className="text-[10px] text-slate-500 uppercase">Goods Due At Inspection</div>
+                          <div className="font-medium text-[#C8A96A] tabular-nums">{formatNaira(order.goodsDue || order.subtotal)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -711,8 +956,8 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
 
                   <div>
                     <h4 className="text-base font-bold text-white font-serif">Campus Seller Reputation</h4>
-                    <p className="text-slate-300 text-xs mt-1 max-w-md">
-                      Student reviews are gathered only from verified order completions. Maintain high ratings by delivering on time and allowing students to inspect items before collecting the delivery code.
+                    <p className="text-[#8C9399] text-xs mt-1 max-w-md font-light">
+                      Student reviews are gathered only from verified order completions. Maintain high ratings by delivering on time and allowing students to inspect items before completing payment on delivery.
                     </p>
                   </div>
                 </div>
@@ -880,61 +1125,60 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
           )}
         </div>
 
-        {/* Handover OTP Input Modal */}
-        {selectedOrderForHandover && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm">
-            <div className="relative w-full max-w-md rounded-3xl bg-[#0F172A] border-2 border-[#f3c84b] p-6 text-center space-y-4">
-              <button
-                onClick={() => setSelectedOrderForHandover(null)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
 
-              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-[#f3c84b] mx-auto flex items-center justify-center border border-amber-500/40">
-                <KeyRound className="w-6 h-6" />
-              </div>
 
-              <div>
-                <h3 className="text-lg font-bold text-white font-serif">Enter Buyer Delivery Code</h3>
-                <p className="text-xs text-slate-300 mt-1">
-                  Ask <strong>{selectedOrderForHandover.buyerName}</strong> for their 6-digit confirmation code after they inspect the item.
-                </p>
-              </div>
-
-              {otpError && (
-                <div className="p-3 rounded-xl bg-red-950/80 border border-red-500/60 text-red-200 text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                  <span>{otpError}</span>
+        {/* Buyer Refusal Report Modal */}
+        {refusalOrderId && (
+          <div className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-[#0B1120] border border-rose-500/50 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl text-xs">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-rose-400">
+                  <AlertTriangle className="w-5 h-5" />
+                  <h3 className="font-bold text-white text-sm">Report Buyer Refused Payment</h3>
                 </div>
-              )}
-
-              {otpSuccessMessage && (
-                <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/60 text-emerald-200 text-xs flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>{otpSuccessMessage}</span>
-                </div>
-              )}
-
-              <form onSubmit={handleVerifyOtpSubmit} className="space-y-4">
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={submittedOtp}
-                  onChange={(e) => setSubmittedOtp(e.target.value.replace(/\D/g, ''))}
-                  placeholder="••••••"
-                  className="w-full text-center font-mono text-3xl font-black tracking-[0.3em] bg-[#0B1120] border border-[#C8A96A]/40 rounded-2xl py-3 text-white focus:outline-none focus:border-[#C8A96A]"
-                  autoFocus
-                />
-
                 <button
-                  type="submit"
-                  disabled={isSubmittingOtp || submittedOtp.length < 6}
-                  className="w-full py-3 rounded-2xl bg-[#C8A96A] hover:bg-[#b89858] disabled:opacity-50 text-black font-medium text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                  onClick={() => setRefusalOrderId(null)}
+                  className="text-slate-400 hover:text-white cursor-pointer"
                 >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>{isSubmittingOtp ? 'Verifying with Vault...' : 'Validate Code & Release Payout'}</span>
+                  <X className="w-4 h-4" />
                 </button>
+              </div>
+
+              <p className="text-slate-300 leading-relaxed">
+                If you brought the exact described item to the designated campus meeting point in good condition and the buyer refused payment without valid reason, report it here. The administrator will review this report and apply a 30-day suspension to the buyer's account if confirmed.
+              </p>
+
+              <form onSubmit={handleConfirmBuyerRefusal} className="space-y-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Details / What Occurred *
+                  </label>
+                  <textarea
+                    value={refusalReason}
+                    onChange={(e) => setRefusalReason(e.target.value)}
+                    rows={3}
+                    required
+                    className="w-full bg-[#020406] border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-rose-400"
+                    placeholder="Describe what occurred at the meeting point..."
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setRefusalOrderId(null)}
+                    className="px-3 py-1.5 rounded-xl border border-slate-700 text-xs text-slate-300 hover:bg-slate-800 cursor-pointer"
+                  >
+                    Dismiss
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingRefusal}
+                    className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs cursor-pointer disabled:opacity-50 transition-colors shadow"
+                  >
+                    {isSubmittingRefusal ? 'Submitting...' : 'Submit Report to Admin'}
+                  </button>
+                </div>
               </form>
             </div>
           </div>
@@ -945,10 +1189,10 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
           isOpen={isBankSwitcherOpen}
           onClose={() => setIsBankSwitcherOpen(false)}
           currentBankName={currentUser.bankDetails?.bankName || 'PalmPay'}
-          currentAccountNumber={currentUser.bankDetails?.accountNumberMasked || '08066950607'}
+          currentAccountNumber={currentUser.bankDetails?.accountNumberMasked || ''}
           currentAccountName={currentUser.bankDetails?.accountName || currentUser.name}
-          onSave={(details) => {
-            store.updateSellerBankDetails(currentUser.id, details);
+          onSave={async (details) => {
+            return await store.requestBankChange(details);
           }}
         />
       </div>

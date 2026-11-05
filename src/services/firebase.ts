@@ -2,12 +2,14 @@ import { initializeApp } from 'firebase/app';
 import {
   getFirestore,
   doc,
+  getDoc,
   getDocFromServer,
   collection,
   onSnapshot,
   setDoc,
   updateDoc,
   deleteDoc,
+  deleteField,
   getDocs,
   query,
   where,
@@ -24,7 +26,7 @@ import {
   type User as FirebaseUser
 } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
-import type { Product, Order, User, SellerReview, Complaint, SellerVerificationRequest } from '../types';
+import type { Product, Order, User, SellerProfile, SellerReview, Complaint, SellerVerificationRequest } from '../types';
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
@@ -168,12 +170,59 @@ export async function logoutUser(): Promise<void> {
   }
 }
 
-export async function saveUserToFirestore(user: User): Promise<void> {
-  const path = `users/${user.id}`;
+export async function getUserFromFirestore(userId: string): Promise<User | null> {
+  const path = `users/${userId}`;
   try {
-    await setDoc(doc(db, 'users', user.id), user);
+    const docSnap = await getDoc(doc(db, 'users', userId));
+    if (docSnap.exists()) {
+      return docSnap.data() as User;
+    }
+    return null;
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
+    handleFirestoreError(error, OperationType.GET, path);
+    return null;
+  }
+}
+
+export function subscribeToSellerProfiles(onUpdate: (profiles: SellerProfile[]) => void): Unsubscribe {
+  const path = 'sellerProfiles';
+  try {
+    return onSnapshot(
+      collection(db, path),
+      (snapshot) => {
+        const items: SellerProfile[] = [];
+        snapshot.forEach((docSnap) => {
+          items.push(docSnap.data() as SellerProfile);
+        });
+        onUpdate(items);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+    return () => {};
+  }
+}
+
+export async function cleanupSellerPhonesFromProducts(): Promise<void> {
+  const path = 'products';
+  try {
+    const snapshot = await getDocs(collection(db, path));
+    const promises: Promise<void>[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      if ('sellerPhone' in data) {
+        promises.push(updateDoc(doc(db, path, docSnap.id), { sellerPhone: deleteField() }));
+      }
+    });
+    if (promises.length > 0) {
+      await Promise.all(promises);
+      console.log(`[Abbason Hub] Cleaned up sellerPhone from ${promises.length} legacy products.`);
+    }
+  } catch (error) {
+    console.warn('[Abbason Hub] sellerPhone cleanup info:', error);
   }
 }
 
@@ -208,44 +257,82 @@ export function subscribeToProducts(
   }
 }
 
-export function subscribeToOrders(
-  onUpdate: (orders: Order[]) => void,
-  userId?: string,
-  userEmail?: string,
-  role?: string
+/**
+ * Order sync:
+ * Owner admin: limited whole-collection query.
+ * Everyone else: two queries, where('buyerId','==',uid) and where('sellerId','==',uid),
+ * merged by order id; the remote copy wins. Nothing when signed out.
+ */
+export function subscribeToUserOrders(
+  userId: string,
+  isOwnerAdmin: boolean,
+  onUpdate: (orders: Order[]) => void
 ): Unsubscribe {
+  if (!userId) return () => {};
   const path = 'orders';
-  try {
-    const isOwnerAdmin = userEmail?.toLowerCase() === 'chukwuagoziemgracious@gmail.com';
-    let q;
-    if (isOwnerAdmin) {
-      q = query(collection(db, path), limit(150));
-    } else if (userId) {
-      if (role === 'seller') {
-        q = query(collection(db, path), where('sellerId', '==', userId), limit(100));
-      } else {
-        q = query(collection(db, path), where('buyerId', '==', userId), limit(100));
-      }
-    } else {
-      // Unauthenticated callers should not trigger full scan error
+
+  if (isOwnerAdmin) {
+    try {
+      const q = query(collection(db, path), limit(150));
+      return onSnapshot(
+        q,
+        (snapshot) => {
+          const items: Order[] = [];
+          snapshot.forEach((docSnap) => {
+            items.push(docSnap.data() as Order);
+          });
+          onUpdate(items);
+        },
+        (error) => {
+          handleFirestoreError(error, OperationType.LIST, path);
+        }
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, path);
       return () => {};
     }
+  }
 
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const items: Order[] = [];
-        snapshot.forEach((docSnap) => {
-          items.push(docSnap.data() as Order);
-        });
-        onUpdate(items);
+  // Regular user: merge buyer and seller queries
+  const buyerMap = new Map<string, Order>();
+  const sellerMap = new Map<string, Order>();
+
+  const emit = () => {
+    const merged = new Map<string, Order>();
+    buyerMap.forEach((ord, id) => merged.set(id, ord));
+    sellerMap.forEach((ord, id) => merged.set(id, ord));
+    onUpdate(Array.from(merged.values()));
+  };
+
+  try {
+    const qBuyer = query(collection(db, path), where('buyerId', '==', userId), limit(100));
+    const unsubBuyer = onSnapshot(
+      qBuyer,
+      (snap) => {
+        buyerMap.clear();
+        snap.forEach((d) => buyerMap.set(d.id, d.data() as Order));
+        emit();
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, path);
-      }
+      (err) => handleFirestoreError(err, OperationType.LIST, path)
     );
+
+    const qSeller = query(collection(db, path), where('sellerId', '==', userId), limit(100));
+    const unsubSeller = onSnapshot(
+      qSeller,
+      (snap) => {
+        sellerMap.clear();
+        snap.forEach((d) => sellerMap.set(d.id, d.data() as Order));
+        emit();
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, path)
+    );
+
+    return () => {
+      unsubBuyer();
+      unsubSeller();
+    };
   } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
+    handleFirestoreError(error, OperationType.LIST, path);
     return () => {};
   }
 }
@@ -340,6 +427,15 @@ export async function updateVerificationInFirestore(verificationId: string, part
     await updateDoc(doc(db, 'verifications', verificationId), partial);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function saveUserToFirestore(user: User): Promise<void> {
+  const path = `users/${user.id}`;
+  try {
+    await setDoc(doc(db, 'users', user.id), user);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 

@@ -7,6 +7,8 @@ export type ProductStatus = 'pending_review' | 'approved' | 'rejected';
 export type DeliveryOption = 'seller_delivers' | 'buyer_pickup' | 'both';
 
 export type OrderStatus =
+  | 'awaiting_payment'
+  | 'scheduled'
   | 'delivery_fee_paid'
   | 'in_transit'
   | 'delivered_pending_inspection'
@@ -60,6 +62,15 @@ export interface SellerReview {
   verifiedPurchase: boolean;
 }
 
+export interface SellerProfile {
+  id: string;
+  storeName: string;
+  campusId: string;
+  campusName: string;
+  isVerifiedSeller: boolean;
+  isSuspended?: boolean;
+}
+
 export interface User {
   id: string;
   name: string;
@@ -70,7 +81,7 @@ export interface User {
   campusName: string;
   hostel: string;
   isVerifiedSeller?: boolean;
-  sellerVerificationStatus?: 'not_applied' | 'pending' | 'verified' | 'rejected';
+  sellerVerificationStatus?: 'not_applied' | 'pending' | 'approved_pending_fee' | 'verified' | 'rejected';
   storeName?: string;
   bio?: string;
   studentIdCardUrl?: string;
@@ -82,16 +93,29 @@ export interface User {
     accountNumberMasked: string;
     accountName: string;
   };
+  bannedUntilMs?: number;
+  suspendedUntilMs?: number;
+  subaccountCode?: string;
   rating?: number;
   reviewsCount?: number;
   salesCount?: number;
+}
+
+export type DeliveryScheduleType = 'within_3_days' | 'within_7_days' | 'specific_days';
+export type DeliveryDayOfWeek = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+export type DeliveryTimeSlot = 'morning' | 'afternoon' | 'evening' | 'any';
+
+export interface DeliverySchedule {
+  type: DeliveryScheduleType;
+  days?: number[]; // (0 = Sunday, 1 = Monday, ... 6 = Saturday)
+  specificDays?: DeliveryDayOfWeek[];
+  timeSlot: DeliveryTimeSlot;
 }
 
 export interface Product {
   id: string;
   sellerId: string;
   sellerName: string;
-  sellerPhone: string;
   sellerVerified: boolean;
   sellerRating?: number;
   sellerReviewCount?: number;
@@ -111,6 +135,7 @@ export interface Product {
   rejectionReason?: string;
   createdAt: string;
   brand?: string;
+  deliverySchedule?: DeliverySchedule;
 }
 
 export interface CartItem {
@@ -137,35 +162,63 @@ export interface Order {
   orderNumber: string;
   buyerId: string;
   buyerName: string;
-  buyerPhone: string;
+  buyerPhone?: string;
   buyerHostel: string;
   sellerId: string;
   sellerName: string;
   campusId: string;
   campusName: string;
   items: OrderItem[];
-  subtotal: number; // Sum of items (P)
-  deliveryFee: number; // Upfront delivery transport fee (D)
-  gatewayFee: number; // Transaction fee paid at checkout
-  totalAmount: number; // Total floor value of everything (P + D + G)
-  upfrontDeliveryFee: number; // Small commitment fee paid upfront
-  upfrontGatewayFee: number;
-  upfrontTotalPaid: number; // What the student paid right now at checkout
-  itemsTotalDueOnDelivery: number; // What the student owes upon physical inspection
-  itemsTotalPaid: number; // What has been paid so far at handoff
-  paymentMode: 'inspect_and_pay' | 'escrow';
-  platformCommission: number;
-  sellerPayoutAmount: number;
+  subtotal: number;
+  deliveryFee: number;
+  gatewayFee: number;
+  totalAmount: number;
+  upfrontDeliveryFee?: number;
+  upfrontGatewayFee?: number;
+  upfrontTotalPaid?: number;
+  itemsTotalDueOnDelivery?: number;
+  itemsTotalPaid?: number;
+  deliveryFeePaid?: boolean;
+  goodsDue?: number;
+  goodsPaid?: number;
+  commissionCollected?: number;
+  platformCommission?: number;
+  sellerPayoutAmount?: number;
+  paymentMode?: string;
   fulfillmentType: 'seller_delivers' | 'buyer_pickup';
   deliveryInstructions: string;
+  meetingPoint?: {
+    kind: 'safe_checkpoint' | 'custom';
+    label: string;
+  };
+  scheduledDate?: string;
+  deliveryDeadlineMs?: number;
+  contactRevealAtMs?: number;
+  timeSlot?: 'morning' | 'afternoon' | 'evening' | 'any';
   paymentMethod: 'card' | 'bank_transfer' | 'ussd';
   paymentStatus: PaymentStatus;
   status: OrderStatus;
-  otpHash?: string;
-  otpSalt?: string;
-  otpExpiresAt?: number;
-  otpFailedAttempts?: number;
-  deliveryOtpForBuyer?: string;
+  sellerDefault?: boolean;
+  buyerReportedRefusal?: boolean;
+  refund?: {
+    owedAmount?: number;
+    amountOwed?: number;
+    multiplier?: number;
+    status: 'owed' | 'paid_claimed' | 'confirmed' | 'disputed';
+    dueAt?: number;
+    bankAccount?: {
+      bankName: string;
+      accountNumber: string;
+      accountName: string;
+    };
+    disputeReason?: string;
+  };
+  refundAccount?: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  };
+  cancelReason?: 'buyer_cancelled' | 'seller_cancelled' | string;
   hasBuyerReviewed?: boolean;
   createdAt: string;
   deliveredAt?: string;

@@ -12,7 +12,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { store } from '../services/store';
-import { DeliveryOption, ProductCondition } from '../types';
+import { DeliveryOption, ProductCondition, DeliveryScheduleType, DeliveryDayOfWeek, DeliveryTimeSlot } from '../types';
 import { compressImage } from '../utils/imageCompressor';
 
 interface NewListingModalProps {
@@ -54,6 +54,9 @@ export const NewListingModal: React.FC<NewListingModalProps> = ({
     activeCampus.safeMeetupPoints[0] || 'Campus Main Gate / SUB'
   );
   const [imageUrl, setImageUrl] = useState(PRESET_IMAGES[0].url);
+  const [scheduleType, setScheduleType] = useState<DeliveryScheduleType>('within_7_days');
+  const [specificDays, setSpecificDays] = useState<DeliveryDayOfWeek[]>(['monday', 'wednesday', 'friday']);
+  const [timeSlot, setTimeSlot] = useState<DeliveryTimeSlot>('any');
   const [brand, setBrand] = useState('');
   const [isCompressing, setIsCompressing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -87,6 +90,11 @@ export const NewListingModal: React.FC<NewListingModalProps> = ({
         deliveryOption,
         deliveryFee: deliveryOption !== 'buyer_pickup' ? parseFloat(deliveryFee) || 0 : 0,
         pickupLandmark: deliveryOption !== 'seller_delivers' ? pickupLandmark : 'Hostel delivery',
+        deliverySchedule: {
+          type: scheduleType,
+          specificDays: scheduleType === 'specific_days' ? specificDays : undefined,
+          timeSlot
+        },
         brand: brand.trim() || undefined
       });
 
@@ -322,6 +330,105 @@ export const NewListingModal: React.FC<NewListingModalProps> = ({
                 />
               </div>
             )}
+
+            {/* Delivery Schedule Options */}
+            <div className="pt-2 border-t border-white/[0.06] space-y-2">
+              <span className="font-medium text-[#C8A96A] uppercase tracking-wider text-[10px] block">
+                Delivery Schedule *
+              </span>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScheduleType('within_3_days')}
+                  className={`py-1.5 px-2 rounded-xl text-[11px] text-center border transition-colors cursor-pointer ${
+                    scheduleType === 'within_3_days'
+                      ? 'bg-[#C8A96A]/20 border-[#C8A96A] text-[#C8A96A] font-medium'
+                      : 'bg-[#0B1120] border-white/[0.08] text-slate-400'
+                  }`}
+                >
+                  Within 3 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleType('within_7_days')}
+                  className={`py-1.5 px-2 rounded-xl text-[11px] text-center border transition-colors cursor-pointer ${
+                    scheduleType === 'within_7_days'
+                      ? 'bg-[#C8A96A]/20 border-[#C8A96A] text-[#C8A96A] font-medium'
+                      : 'bg-[#0B1120] border-white/[0.08] text-slate-400'
+                  }`}
+                >
+                  Within 7 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleType('specific_days')}
+                  className={`py-1.5 px-2 rounded-xl text-[11px] text-center border transition-colors cursor-pointer ${
+                    scheduleType === 'specific_days'
+                      ? 'bg-[#C8A96A]/20 border-[#C8A96A] text-[#C8A96A] font-medium'
+                      : 'bg-[#0B1120] border-white/[0.08] text-slate-400'
+                  }`}
+                >
+                  Specific Days
+                </button>
+              </div>
+
+              {scheduleType === 'specific_days' && (
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-1">
+                    Select Available Days
+                  </label>
+                  <div className="grid grid-cols-4 sm:grid-cols-7 gap-1">
+                    {(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as DeliveryDayOfWeek[]).map((day) => {
+                      const selected = specificDays.includes(day);
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          onClick={() => {
+                            if (selected) {
+                              if (specificDays.length > 1) {
+                                setSpecificDays(specificDays.filter((d) => d !== day));
+                              }
+                            } else {
+                              setSpecificDays([...specificDays, day]);
+                            }
+                          }}
+                          className={`py-1 text-[10px] uppercase font-bold rounded-lg border text-center transition-colors cursor-pointer ${
+                            selected
+                              ? 'bg-[#C8A96A] border-[#C8A96A] text-[#0B1120]'
+                              : 'bg-[#0B1120] border-white/[0.08] text-slate-400'
+                          }`}
+                        >
+                          {day.slice(0, 3)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-1">
+                  Time Slot Preference
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {(['morning', 'afternoon', 'evening', 'any'] as DeliveryTimeSlot[]).map((slot) => (
+                    <button
+                      key={slot}
+                      type="button"
+                      onClick={() => setTimeSlot(slot)}
+                      className={`py-1 px-1 text-[11px] capitalize rounded-lg border text-center transition-colors cursor-pointer ${
+                        timeSlot === slot
+                          ? 'bg-[#C8A96A]/20 border-[#C8A96A] text-[#C8A96A] font-medium'
+                          : 'bg-[#0B1120] border-white/[0.08] text-slate-400'
+                      }`}
+                    >
+                      {slot}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div>

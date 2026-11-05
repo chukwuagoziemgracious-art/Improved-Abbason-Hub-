@@ -346,7 +346,7 @@ export const INITIAL_SELLER_REVIEWS: SellerReview[] = [
     buyerName: 'Chiamaka Okoli',
     campusName: 'UNIZIK (Awka)',
     rating: 5,
-    comment: 'Collected at Digital Library! Emeka allowed me to benchmark the laptop and inspect the battery health before I gave him the 6-digit delivery OTP code. Super honest student seller!',
+    comment: 'Collected at Digital Library! Emeka allowed me to benchmark the laptop and inspect the battery health before completing handover. Super honest student seller!',
     createdAt: '2026-10-14T08:00:00Z',
     verifiedPurchase: true
   },
@@ -370,7 +370,7 @@ export const INITIAL_SELLER_REVIEWS: SellerReview[] = [
     buyerName: 'Kemi Adebayo',
     campusName: 'UNIZIK (Awka)',
     rating: 4.8,
-    comment: 'Super fast communication on WhatsApp. Came with original charger and tested immediately at Second Gate. Recommended!',
+    comment: 'Super fast communication. Came with original charger and tested immediately at Second Gate. Recommended!',
     createdAt: '2026-10-10T11:15:00Z',
     verifiedPurchase: true
   },
@@ -405,7 +405,6 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod_hp_laptop',
     sellerId: 'user_emeka',
     sellerName: 'Emeka Campus Gadgets',
-    sellerPhone: '+234 803 412 9081',
     sellerVerified: true,
     sellerRating: 4.9,
     sellerReviewCount: 38,
@@ -426,13 +425,16 @@ export const INITIAL_PRODUCTS: Product[] = [
     pickupLandmark: 'Ifite First Gate, Opposite Peace Mass Logistics',
     status: 'approved',
     brand: 'HP',
-    createdAt: '2026-10-10T10:00:00Z'
+    createdAt: '2026-10-10T10:00:00Z',
+    deliverySchedule: {
+      type: 'within_7_days',
+      timeSlot: 'any'
+    }
   },
   {
     id: 'prod_macbook_air',
     sellerId: 'user_tunde',
     sellerName: 'Akoka Tech Store',
-    sellerPhone: '+234 802 771 9901',
     sellerVerified: true,
     sellerRating: 5.0,
     sellerReviewCount: 19,
@@ -453,13 +455,16 @@ export const INITIAL_PRODUCTS: Product[] = [
     pickupLandmark: 'UNILAG New Hall Shopping Arena, Akoka',
     status: 'approved',
     brand: 'Apple',
-    createdAt: '2026-10-11T12:00:00Z'
+    createdAt: '2026-10-11T12:00:00Z',
+    deliverySchedule: {
+      type: 'within_7_days',
+      timeSlot: 'any'
+    }
   },
   {
     id: 'prod_rechargeable_fan',
     sellerId: 'user_emeka',
     sellerName: 'Emeka Campus Gadgets',
-    sellerPhone: '+234 803 412 9081',
     sellerVerified: true,
     sellerRating: 4.9,
     sellerReviewCount: 38,
@@ -479,13 +484,16 @@ export const INITIAL_PRODUCTS: Product[] = [
     pickupLandmark: 'Perm Site Student Lodges, Perm Site Gate',
     status: 'approved',
     brand: 'Lontor',
-    createdAt: '2026-10-12T09:00:00Z'
+    createdAt: '2026-10-12T09:00:00Z',
+    deliverySchedule: {
+      type: 'within_7_days',
+      timeSlot: 'any'
+    }
   },
   {
     id: 'prod_camp_gas_cylinder',
     sellerId: 'user_amara',
     sellerName: 'Amara Treats & Thrift',
-    sellerPhone: '+234 706 881 2304',
     sellerVerified: true,
     sellerRating: 4.8,
     sellerReviewCount: 24,
@@ -505,13 +513,16 @@ export const INITIAL_PRODUCTS: Product[] = [
     pickupLandmark: 'Amansea Junction, Beside Total Energy',
     status: 'approved',
     brand: 'Golden Lion',
-    createdAt: '2026-10-12T14:00:00Z'
+    createdAt: '2026-10-12T14:00:00Z',
+    deliverySchedule: {
+      type: 'within_7_days',
+      timeSlot: 'any'
+    }
   },
   {
     id: 'prod_engineering_drawing_board',
     sellerId: 'user_emeka',
     sellerName: 'Emeka Campus Gadgets',
-    sellerPhone: '+234 803 412 9081',
     sellerVerified: true,
     sellerRating: 4.9,
     sellerReviewCount: 38,
@@ -531,13 +542,16 @@ export const INITIAL_PRODUCTS: Product[] = [
     pickupLandmark: 'UNN Faculty of Engineering Pavilion, Nsukka',
     status: 'approved',
     brand: 'Standard Technical',
-    createdAt: '2026-10-13T08:30:00Z'
+    createdAt: '2026-10-13T08:30:00Z',
+    deliverySchedule: {
+      type: 'within_7_days',
+      timeSlot: 'any'
+    }
   },
   {
     id: 'prod_vintage_denim_jacket',
     sellerId: 'user_amara',
     sellerName: 'Amara Treats & Thrift',
-    sellerPhone: '+234 706 881 2304',
     sellerVerified: true,
     sellerRating: 4.8,
     sellerReviewCount: 24,
@@ -557,13 +571,16 @@ export const INITIAL_PRODUCTS: Product[] = [
     pickupLandmark: 'OAU SUB Building Car Park, Ile-Ife',
     status: 'approved',
     brand: 'Thrift Curated',
-    createdAt: '2026-10-13T11:00:00Z'
+    createdAt: '2026-10-13T11:00:00Z',
+    deliverySchedule: {
+      type: 'within_7_days',
+      timeSlot: 'any'
+    }
   },
   {
     id: 'prod_hostel_dorm_fridge',
     sellerId: 'user_tunde',
     sellerName: 'Akoka Tech Store',
-    sellerPhone: '+234 802 771 9901',
     sellerVerified: true,
     sellerRating: 5.0,
     sellerReviewCount: 19,
@@ -583,13 +600,16 @@ export const INITIAL_PRODUCTS: Product[] = [
     pickupLandmark: 'UNILAG Jaja Hall Gate, Akoka',
     status: 'approved',
     brand: 'Hisense',
-    createdAt: '2026-10-13T13:30:00Z'
+    createdAt: '2026-10-13T13:30:00Z',
+    deliverySchedule: {
+      type: 'within_7_days',
+      timeSlot: 'any'
+    }
   },
   {
     id: 'prod_project_binding_printing',
     sellerId: 'user_emeka',
     sellerName: 'Emeka Campus Gadgets',
-    sellerPhone: '+234 803 412 9081',
     sellerVerified: true,
     sellerRating: 4.9,
     sellerReviewCount: 38,
@@ -609,7 +629,11 @@ export const INITIAL_PRODUCTS: Product[] = [
     pickupLandmark: 'FUTO ICT Centre, Owerri',
     status: 'approved',
     brand: 'Express Campus Press',
-    createdAt: '2026-10-14T07:00:00Z'
+    createdAt: '2026-10-14T07:00:00Z',
+    deliverySchedule: {
+      type: 'within_7_days',
+      timeSlot: 'any'
+    }
   }
 ];
 
@@ -643,16 +667,16 @@ export const INITIAL_ORDERS: Order[] = [
     deliveryFee: 1200,
     gatewayFee: 670,
     totalAmount: 39870,
-    upfrontDeliveryFee: 1200,
-    upfrontGatewayFee: 118,
-    upfrontTotalPaid: 1318,
-    itemsTotalDueOnDelivery: 38000,
-    itemsTotalPaid: 38000,
-    paymentMode: 'inspect_and_pay',
-    platformCommission: 1140, // 3% of 38,000 (below 2,000 cap)
-    sellerPayoutAmount: 38060, // 38,000 - 1,140 + 1,200
+    deliveryFeePaid: true,
+    goodsDue: 0,
+    goodsPaid: 38000,
+    commissionCollected: 1140,
     fulfillmentType: 'seller_delivers',
     deliveryInstructions: 'Deliver to Diamond Valley Hostel Gate, Room 14',
+    meetingPoint: {
+      kind: 'safe_checkpoint',
+      label: 'Diamond Valley Hostel Gate'
+    },
     paymentMethod: 'card',
     paymentStatus: 'paid_completed',
     status: 'paid_completed',
